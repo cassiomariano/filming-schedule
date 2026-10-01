@@ -201,11 +201,9 @@ h3.wk{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transfo
 .meta{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px;color:var(--muted);min-width:0}
 .meta b{color:var(--ink);font-weight:600}
 .dates{display:flex;flex-wrap:wrap;gap:4px}
-.dchip{font-family:var(--f-mono);font-size:11px;border:1px solid var(--line);border-radius:4px;padding:1px 6px;white-space:nowrap;background:var(--surface-2)}
-.dchip.fit{border-style:dashed}
-.dchip{cursor:pointer;font:inherit;font-family:var(--f-mono);font-size:11px;border:1px solid transparent}
+.dchip{cursor:pointer;font:inherit;font-family:var(--f-mono);font-size:12px;font-weight:600;border:1px solid transparent;border-radius:5px;padding:2px 7px;white-space:nowrap}
 .dchip:hover{outline:2px solid var(--accent);outline-offset:1px}
-.dchip.off{text-decoration:line-through;color:var(--faint)}
+.dchip.off{text-decoration:line-through}
 .row .acts{display:flex;flex-direction:column;gap:6px;padding:10px 12px 10px 0;justify-content:center}
 .due{font-family:var(--f-mono);font-size:11px;font-weight:600}
 .due.late{color:var(--attn)}
@@ -385,8 +383,8 @@ function dayStatus(c, e){
 }
 
 /* tap a day: booked → worked (blue) → canceled (grey) → released (grey) → booked */
-const CYCLE = ["", "worked", "canceled", "released"];
-const CYCLE_WORDS = {"": "as the call", worked: "worked", canceled: "canceled", released: "released"};
+const CYCLE = ["", "worked", "canceled"];
+const CYCLE_WORDS = {"": "back to automatic colour", worked: "done ✓ (blue)", canceled: "canceled (grey)", released: "released (grey)"};
 async function cycleDay(id, i){
   const c = S.calls.get(id); if (!c || !c.dates || !c.dates[i]) return;
   const dates = c.dates.map(e => ({...e}));
@@ -400,7 +398,7 @@ async function cycleDay(id, i){
     toast(`${nameOf(c)} · ${fmtShort(e.d)}: ${CYCLE_WORDS[next]}`);
   } catch (err) { writeFailed(err); }
 }
-const DAY_TIP = "Tap to change this day: booked → worked → canceled → released";
+const DAY_TIP = "Tap: done (blue) → canceled (grey) → automatic";
 
 /* entries per day for the calendar */
 function dayIndex(){
@@ -529,7 +527,7 @@ function upcomingHTML(cl){
     ["available", "Waiting to hear", "You said you're available; production hasn't confirmed yet."],
     ["pending", "New – reply needed", "Accept or decline these."],
   ];
-  h += `<div class="keyrow" style="margin-top:-4px"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Waiting to hear</span><span><i class="sw s-done"></i>Worked</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day to change it</span></div>`;
+  h += `<div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Available – waiting to hear</span><span><i class="sw s-pending"></i>New</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day to mark it done (blue) or canceled (grey)</span></div>`;
   for (const [st, title, sub] of sections){
     const list = jobs.filter(c => c.status === st);
     if (!list.length) continue;
@@ -593,12 +591,12 @@ function renderCalls(){
     <select class="inp" id="statusSel" aria-label="Status">${[["open","Open (new, available, confirmed)"],["review","From email – to check"],["pending","New – reply needed"],["available","Available"],["confirmed","Confirmed"],["done","Done"],["declined","Declined"],["closed","Released / canceled"],["all","All calls"]].map(([v,l]) => `<option value="${v}"${S.listStatus===v?" selected":""}>${l}</option>`).join("")}</select>
     <select class="inp" id="agencySel" aria-label="Agency"><option value="">All agencies</option>${agencies.map(a => `<option${S.agency===a?" selected":""}>${esc(a)}</option>`).join("")}</select>
     <select class="inp" id="sortSel" aria-label="Sort">${[["next","Next date"],["received","Newest received"],["reply","Reply deadline"],["project","Project A–Z"]].map(([v,l]) => `<option value="${v}"${S.sort===v?" selected":""}>Sort: ${l}</option>`).join("")}</select>
-  </div><div class="src">${list.length} of ${S.calls.size} calls</div><div class="list">`;
+  </div><div class="src">${list.length} of ${S.calls.size} calls</div><div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Available – waiting to hear</span><span><i class="sw s-pending"></i>New</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day to mark it done (blue) or canceled (grey)</span></div><div class="list">`;
   if (!list.length) h += `<div class="empty"><h2>No calls here</h2><p>Try another status or agency, or add a new availability check.</p></div>`;
   for (const c of list){
     const du = c.status === "pending" ? dueText(c.respondBy) : null;
     const ds = (c.dates||[]).slice().sort((a,b)=>a.d.localeCompare(b.d));
-    const shown = ds.length > 8 ? ds.filter(e => e.d >= TODAY).slice(0,8) : ds;
+    const shown = ds.slice(0, 40);
     h += `<article class="row"><span class="stripe ${clsS(c.status)}"></span>
       <div class="body" data-open="${c.id}" role="button" tabindex="0">
         <div class="line1"><span class="proj">${esc(nameOf(c))}</span><span class="pill ${clsS(c.status)}">${SMAP[c.status]?.short||c.status}</span>${c.attention?`<span class="flag">● Attention</span>`:""}</div>
