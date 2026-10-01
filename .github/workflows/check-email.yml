@@ -27,6 +27,10 @@ on:
         description: "Re-read everything: all folders, oldest first, work out each job's status again (no phone alerts)"
         type: boolean
         default: false
+      survey:
+        description: "Count words in agency email subjects (counts only)"
+        type: boolean
+        default: false
       portal_debug:
         description: "Check EP message pages now and report their format (counts only)"
         type: boolean
@@ -54,6 +58,7 @@ jobs:
           TEST_ALERT: ${{ github.event.inputs.test_alert || 'false' }}
           FIND: ${{ github.event.inputs.find || '' }}
           REBUILD: ${{ github.event.inputs.rebuild || 'false' }}
+          SURVEY: ${{ github.event.inputs.survey || 'false' }}
           PORTAL_DEBUG: ${{ github.event.inputs.portal_debug == 'true' && 'yes' || '' }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           YAHOO_EMAIL_1: ${{ secrets.YAHOO_EMAIL_1 }}

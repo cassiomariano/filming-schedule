@@ -23,6 +23,9 @@ const DAYS_BACK = Number(process.env.DAYS_BACK || 3);
 // "Re-read everything": go through every folder, oldest email first, and work out the status
 // of each job again (request → your answer → booking / release → call times). No phone alerts.
 const REBUILD = process.env.REBUILD === "true";
+const SURVEY = process.env.SURVEY === "true";
+const survey = {};
+const SURVEY_WORDS = ["book", "confirm", "selected", "pencil", "hold", "call sheet", "call time", "callsheet", "schedule", "details", "final", "release", "cancel", "stood down", "not required", "unfortunately", "update", "change", "reminder", "fitting", "wardrobe", "costume", "travel", "tomorrow", "pay", "re:", "availability", "av ", "check", "request"];
 const stats = { booked: [0, 0, 0], released: [0, 0], replied: [0, 0], calltime: [0, 0], restored: 0, folders: 0 };
 const accounts = [
   { email: process.env.YAHOO_EMAIL_1, password: process.env.YAHOO_APP_PASSWORD_1 },
@@ -521,6 +524,13 @@ async function checkFolder(client, account, counts, folder, collect) {
     const env = msg.envelope || {};
     const from = (env.from && env.from[0]) || {};
     // only emails sent by a casting / extras agency (never Spotlight, shops, apps...)
+    if (SURVEY && isFromCastingAgency(from.name, from.address, knownAgencies)) {
+      const subj = String(env.subject || "").toLowerCase();
+      const k = classifyEmail(env.subject || "", "") || "other";
+      survey["all " + k] = (survey["all " + k] || 0) + 1;
+      SURVEY_WORDS.forEach(w => { if (subj.includes(w)) { const t = `"${w}"→${k}`; survey[t] = (survey[t] || 0) + 1; } });
+      continue;
+    }
     if (isFromCastingAgency(from.name, from.address, knownAgencies) || CALL_TIME_SUBJECT.test(env.subject || "")) {
       candidates.push({ uid: msg.uid, id: env.messageId || account.email + ":" + msg.uid });
     } else {
@@ -723,6 +733,12 @@ async function handleMail(m, account, counts, rereading) {
   }
 
   if (process.env.FIND) { await findEmails(process.env.FIND); process.exit(0); }
+  if (SURVEY) {
+    for (const a of accounts) { try { await checkAccount(a); } catch (e) { report("warning", "Survey", "account skipped (" + (e.code || e.name) + ")"); } }
+    const rows = Object.entries(survey).sort((a, b) => b[1] - a[1]).map(([k, v]) => k + " " + v);
+    for (let i = 0; i < rows.length; i += 25) report("notice", "Subject words " + (i / 25 + 1), rows.slice(i, i + 25).join(" · "));
+    process.exit(0);
+  }
 
   let failed = false;
   for (let i = 0; i < accounts.length; i++) {
