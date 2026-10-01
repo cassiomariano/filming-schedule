@@ -206,6 +206,34 @@ async function applyCallTime(r, ct, subject) {
 // The "Respond" link in an EP email opens a message page (no login needed) with the production
 // name, every date, the deadline and, once you've replied, your answers. The robot only READS
 // these pages (a normal page visit). It never opens Yes/No links, which could answer for you.
+const YES_RE = /^(yes|available|i am available|i'm available|i can|can attend|i can attend|happy to|confirm)/i;
+const NO_RE = /^(no\b|not available|unavailable|i am not|i'm not|i can'?not|can'?t|cannot|decline)/i;
+const shapes = {};   // counts of answer shapes only (no content), for the format check
+function shape(k) { shapes[k] = (shapes[k] || 0) + 1; }
+// every ticked choice on the page: { yes/no, the date it belongs to (if any) }
+function tickedAnswers(text, parse) {
+  const L = text.split("\n").map(x => x.trim()).filter(Boolean);
+  const out = [];
+  let lastDate = null, lastDateLine = -99;
+  L.forEach((line, i) => {
+    const ds = parse(line);
+    if (ds.length) { lastDate = ds; lastDateLine = i; }
+    const parts = line.split("☒");
+    for (let k = 1; k < parts.length; k++) {
+      const after = parts[k].split("☐")[0].replace(/^[\s|:-]+/, "");
+      const before = parts[k - 1].split("☐").pop().replace(/[\s|:-]+$/, "").split(/\s{2,}|\|/).pop().trim();
+      let a = YES_RE.test(after) ? "yes" : NO_RE.test(after) ? "no" : null;
+      let where = "after";
+      if (!a && after === "") { const nx = (L[i + 1] || ""); a = YES_RE.test(nx) ? "yes" : NO_RE.test(nx) ? "no" : null; where = "nextline"; }
+      if (!a) { a = /(^|\s)(yes|available)$/i.test(before) && !/not available$/i.test(before) ? "yes" : /(^|\s)(no|not available|unavailable)$/i.test(before) ? "no" : null; where = "before"; }
+      shape(a ? `${a}-${where}` : (after ? "other-word" : "empty"));
+      const near = ds.length ? ds : (i - lastDateLine <= 4 ? lastDate : null);
+      shape(ds.length ? "date-same-line" : near ? "date-near" : "no-date");
+      if (a) out.push({ answer: a, dates: (near || []).map(d => d.d) });
+    }
+  });
+  return out;
+}
 const portal = { read: 0, failed: 0, login: 0, answered: 0, recorded: 0, radios: 0, ticked: 0, scripts: 0, dated: 0 };
 function portalLink(c) {
   const l = (c.links || []).find(x => x.kind === "respond" && /^https:\/\/[a-z0-9.-]*epcastingportal\.com\//i.test(x.url));
@@ -255,7 +283,11 @@ async function enrichFromPortal(call) {
   // your answers, once you've replied on the page
   if (/successfully recorded your response/i.test(text)) {
     call.replied = true;
-    const yes = r.dates.some(d => d.answer === "yes"), no = r.dates.some(d => d.answer === "no");
+    const ticks = tickedAnswers(text, line => parseEmail({ subject: "", fromName: "", html: "", text: line, received: call.received }).dates);
+    const yes = ticks.some(t => t.answer === "yes") || r.dates.some(d => d.answer === "yes");
+    const no = ticks.some(t => t.answer === "no") || r.dates.some(d => d.answer === "no");
+    // remember which days you said yes / no to
+    ticks.forEach(t => t.dates.forEach(d => { const e = call.dates.find(x => x.d === d); if (e) e.answer = t.answer; }));
     const answers = [];
     const L = text.split("\n").map(x => x.trim()).filter(Boolean);
     for (let i = 0; i < L.length; i++) {
@@ -269,7 +301,8 @@ async function enrichFromPortal(call) {
       }
     }
     if (answers.length) call.answers = answers.slice(0, 12);
-    if (call.status === "pending" && (yes || no)) { call.status = no && !yes ? "declined" : "available"; portal.answered++; }
+    if (yes || no) portal.answered++;
+    if (call.status === "pending" && (yes || no)) call.status = no && !yes ? "declined" : "available";
   }
   if (call.project && call.dates.length) { call.review = false; call.reviewReason = ""; }
   return true;
@@ -614,7 +647,7 @@ async function checkFolder(client, account, counts) {
   }
   try { await refreshPendingPortalPages(); } catch (e) { report("warning", "EP pages", "Could not refresh EP pages (" + (e.code || e.name) + ")."); }
   if (portal.read + portal.failed + portal.login) {
-    if (process.env.PORTAL_DEBUG) report("notice", "EP page check", `pages: ${portal.read}; with "recorded your response": ${portal.recorded}; with answer buttons: ${portal.radios}; with ticked answers: ${portal.ticked}; mostly script (built in the browser): ${portal.scripts}; with dates found: ${portal.dated}`);
+    if (process.env.PORTAL_DEBUG) report("notice", "EP page check", `pages: ${portal.read}; with "recorded your response": ${portal.recorded}; with answer buttons: ${portal.radios}; with ticked answers: ${portal.ticked}; mostly script (built in the browser): ${portal.scripts}; with dates found: ${portal.dated}; answer shapes: ${Object.entries(shapes).map(([k, v]) => k + " " + v).join(", ") || "none"}`);
     report("notice", "EP pages", `Read ${portal.read} EP message pages, ${portal.answered} answers picked up` +
       (portal.failed ? `, ${portal.failed} could not be opened` : "") + (portal.login ? `, ${portal.login} asked for a login` : "") + ".");
   }
