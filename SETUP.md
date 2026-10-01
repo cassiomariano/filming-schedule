@@ -53,12 +53,13 @@ Everything used here is free.
 
 1. In Firebase, click the ⚙️ gear, then **Project settings → Service accounts**.
 2. Click **Generate new private key**, then **Generate key**. A `.json` file downloads.
-3. Open that file with a text editor (TextEdit or Notepad) and copy **everything** in it.
+3. Copy the file's contents exactly. On a Mac, open Terminal, type `pbcopy < ` (with a space at the end), drag the file into the window and press Enter. TextEdit can change the quote marks and break the key.
 4. In GitHub, open this repository's **Settings → Secrets and variables → Actions → New repository secret**:
    - Name: `FIREBASE_SERVICE_ACCOUNT`
    - Secret: paste the whole file
    - Click **Add secret**
 5. Delete the downloaded `.json` file from your computer. It's a master key.
+6. Give that key permission to use the database. Open `https://console.cloud.google.com/iam-admin/iam?project=YOUR-PROJECT-ID`, click the ✏️ next to the `firebase-adminsdk-…` account, choose **Add another role → Cloud Datastore User**, and click **Save**. Without this the robot gets "permission denied".
 
 ## 6. Let the robot read your Yahoo inboxes
 
@@ -104,6 +105,7 @@ The robot only **reads** emails. It never deletes them, moves them or marks them
 ## Good to know
 
 - **Calls added from email** start as **New** and appear under **"From your email · check details"** when something was missing. Missing items might be the production name or dates, which happens with "view ASAP" emails whose details are only behind the agency's Respond link. They also appear there when it looks like a call you already have. Open the call, fix the details using the original email shown at the bottom, and save.
+- **Checking the robot:** open **Actions → Check email**, then the latest run. The notes at the top say how many emails it looked at and how many calls it added, or what went wrong.
 - **If the robot stops:** GitHub pauses scheduled robots in repositories with no activity for 60 days. You'll get an email; open **Actions → Check email → Enable workflow**.
 - **Teaching it a new agency format:** the rules live in `parser.js`. Copies of real emails for testing live in `tests/emails.json`. Run `npm test` to check them.
 - **Costs:** Firebase's free plan and GitHub Actions for public repositories are both free at this size.
