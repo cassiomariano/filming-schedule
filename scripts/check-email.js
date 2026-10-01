@@ -16,7 +16,7 @@ const crypto = require("crypto");
 const { ImapFlow } = require("imapflow");
 const { simpleParser } = require("mailparser");
 const admin = require("firebase-admin");
-const { parseEmail, isAvailabilityCheck, htmlToText } = require("../parser.js");
+const { parseEmail, isAvailabilityCheck, htmlToText, AGENCIES } = require("../parser.js");
 
 // ---------- settings (stored as GitHub secrets, never in the code) ----------
 const DAYS_BACK = Number(process.env.DAYS_BACK || 3);
@@ -77,6 +77,15 @@ async function loadExistingCalls() {
   return existingCalls;
 }
 
+// Quick first look using only the sender and subject, so the robot downloads
+// just the emails that could be casting calls (a busy inbox has hundreds of others).
+function mightBeCasting(subject, fromName, fromAddress) {
+  const who = (fromName || "") + " " + (fromAddress || "");
+  if (AGENCIES.some(a => a[1].test(who))) return true;
+  if (/casting|extras|talent|epcastingportal|spotlight|crowd|background/i.test(who)) return true;
+  return /availab|av check|enquiry|option|pencil|booking|shoot|filming|fitting|production|SAs? needed/i.test(subject || "");
+}
+
 async function checkAccount(account) {
   const counts = { looked: 0, alreadySeen: 0, notACall: 0, added: 0 };
   const client = new ImapFlow({
@@ -85,21 +94,34 @@ async function checkAccount(account) {
     secure: true,
     auth: { user: account.email, pass: account.password },
     logger: false,
+    socketTimeout: 120000,
   });
   await client.connect();
   const lock = await client.getMailboxLock("INBOX");
   try {
     const since = new Date(Date.now() - DAYS_BACK * 24 * 60 * 60 * 1000);
-    const uids = await client.search({ since: since }, { uid: true });
-    for (const uid of uids || []) {
+
+    // 1) read only the envelopes (sender, subject, ID) of recent emails: small and fast
+    const candidates = [];
+    for await (const msg of client.fetch({ since: since }, { envelope: true, uid: true })) {
       counts.looked++;
-      // read the whole message without marking it as read
-      const msg = await client.fetchOne(uid, { source: true, envelope: true }, { uid: true });
-      if (!msg || !msg.source) continue;
-      const id = msg.envelope.messageId || account.email + ":" + uid;
-      const key = emailKey(id);
+      const env = msg.envelope || {};
+      const from = (env.from && env.from[0]) || {};
+      if (mightBeCasting(env.subject, from.name, from.address)) {
+        candidates.push({ uid: msg.uid, id: env.messageId || account.email + ":" + msg.uid });
+      } else {
+        counts.notACall++;
+      }
+    }
+
+    // 2) download in full only the possible casting emails we haven't seen before
+    for (const cand of candidates) {
+      const key = emailKey(cand.id);
       const seenRef = db.collection("processed").doc(key);
       if ((await seenRef.get()).exists) { counts.alreadySeen++; continue; }
+      // read the whole message without marking it as read
+      const msg = await client.fetchOne(cand.uid, { source: true }, { uid: true });
+      if (!msg || !msg.source) continue;
 
       const mail = await simpleParser(msg.source);
       const subject = mail.subject || "";
