@@ -135,6 +135,7 @@ GitHub's own timer is unreliable: it often runs late or skips. A free online tim
 ## Good to know
 
 - **Calls added from email** start as **New** and appear under **"From your email · check details"** when something was missing. Missing items might be the production name or dates, which happens with "view ASAP" emails whose details are only behind the agency's Respond link. They also appear there when it looks like a call you already have. Open the call, fix the details using the original email shown at the bottom, and save.
+- **Re-read everything:** Actions → Check email → Run workflow, tick **"Re-read everything"** and type `120` days. The robot reads every folder, oldest email first, and works out each job's status again: request → your answer → booking or release → call time. It sends no phone alerts and takes about 10 minutes.
 - **Checking the robot:** open **Actions → Check email**, then the latest run. The notes at the top say how many emails it looked at and how many calls it added, or what went wrong.
 - **If the robot stops:** GitHub pauses scheduled robots in repositories with no activity for 60 days. You'll get an email; open **Actions → Check email → Enable workflow**.
 - **Teaching it a new agency format:** the rules live in `parser.js`. Copies of real emails for testing live in `tests/emails.json`. Run `npm test` to check them.
