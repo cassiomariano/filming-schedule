@@ -202,6 +202,88 @@ async function applyCallTime(r, ct, subject) {
   return c.id;
 }
 
+// ---------- Entertainment Partners message pages ----------
+// The "Respond" link in an EP email opens a message page (no login needed) with the production
+// name, every date, the deadline and, once you've replied, your answers. The robot only READS
+// these pages (a normal page visit). It never opens Yes/No links, which could answer for you.
+const portal = { read: 0, failed: 0, login: 0, answered: 0 };
+function portalLink(c) {
+  const l = (c.links || []).find(x => x.kind === "respond" && /^https:\/\/[a-z0-9.-]*epcastingportal\.com\//i.test(x.url));
+  return l ? l.url : null;
+}
+async function fetchPortalPage(url) {
+  try {
+    const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(20000),
+      headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", "Accept": "text/html" } });
+    const html = await res.text();
+    if (!res.ok) { portal.failed++; return null; }
+    if (/type=["']?password/i.test(html) && !/availability|enquiry/i.test(html)) { portal.login++; return null; }
+    portal.read++;
+    return html;
+  } catch (e) { portal.failed++; return null; }
+}
+function sameDay(a, b) { return a.d === b.d; }
+// fills in what the page knows; keeps anything you changed yourself
+async function enrichFromPortal(call) {
+  const url = portalLink(call);
+  if (!url) return false;
+  const html = await fetchPortalPage(url);
+  call.portalCheckedAt = new Date().toISOString();
+  if (!html) return false;
+  const text = htmlToText(html);
+  const r = parseEmail({ subject: call.emailSubject || "", fromName: call.agency, html, text: "", received: call.received });
+  if (r.project && (!call.project || call.review)) call.project = r.project;
+  if (!call.role && r.role) call.role = r.role;
+  if (!call.rate && r.rate) call.rate = r.rate;
+  if (!call.respondBy && r.respondBy) call.respondBy = r.respondBy;
+  if (!call.location) call.location = r.location || (r.dates.find(d => d.loc) || {}).loc || "";
+  // dates: add the ones the page lists (keeps your own day changes)
+  const dates = (call.dates || []).map(e => ({ ...e }));
+  r.dates.forEach(x => {
+    const have = dates.find(e => sameDay(e, x));
+    if (!have) dates.push({ d: x.d, kind: x.kind, ...(x.loc ? { loc: x.loc } : {}), ...(x.night ? { night: true } : {}) });
+    else { if (!have.loc && x.loc) have.loc = x.loc; if (x.kind === "reh" && have.kind === "film") have.kind = "reh"; }
+  });
+  dates.sort((a, b) => a.d.localeCompare(b.d));
+  call.dates = dates;
+  // your answers, once you've replied on the page
+  if (/successfully recorded your response/i.test(text)) {
+    call.replied = true;
+    const yes = r.dates.some(d => d.answer === "yes"), no = r.dates.some(d => d.answer === "no");
+    const answers = [];
+    const L = text.split("\n").map(x => x.trim()).filter(Boolean);
+    for (let i = 0; i < L.length; i++) {
+      if (/\?$/.test(L[i]) && L[i].length < 140) {
+        const picked = [];
+        for (let j = i + 1; j < L.length && j < i + 12 && !/\?$/.test(L[j]); j++) {
+          L[j].split("☒").slice(1).forEach(part => { const a = part.split("☐")[0].trim(); if (a) picked.push(a); });
+          if (!/[☒☐]/.test(L[j]) && j === i + 1 && L[j].length < 60) picked.push(L[j]);   // typed answer
+        }
+        if (picked.length) answers.push(L[i].replace(/\?$/, "") + ": " + picked.join(", "));
+      }
+    }
+    if (answers.length) call.answers = answers.slice(0, 12);
+    if (call.status === "pending" && (yes || no)) { call.status = no && !yes ? "declined" : "available"; portal.answered++; }
+  }
+  if (call.project && call.dates.length) { call.review = false; call.reviewReason = ""; }
+  return true;
+}
+// every 20 minutes, look again at EP pages of calls you haven't answered yet (max 6 per run)
+async function refreshPendingPortalPages() {
+  await loadExistingCalls();
+  const due = existingCalls.filter(c => c.id && ["pending"].includes(c.status) && portalLink(c) &&
+    (!c.portalCheckedAt || Date.now() - new Date(c.portalCheckedAt).getTime() > 20 * 60 * 1000)).slice(0, 6);
+  for (const c of due) {
+    const before = JSON.stringify([c.status, c.project, c.dates, c.answers]);
+    const copy = { ...c };
+    await enrichFromPortal(copy);
+    const { id, ...body } = copy;
+    const changed = JSON.stringify([copy.status, copy.project, copy.dates, copy.answers]) !== before;
+    await db.collection("calls").doc(c.id).update(changed ? { ...body, updatedAt: new Date().toISOString() } : { portalCheckedAt: copy.portalCheckedAt });
+    Object.assign(c, copy);
+  }
+}
+
 // every web address in an email (to recognise the same enquiry in a later email)
 function allUrls(html) {
   const out = [];
@@ -238,6 +320,47 @@ async function applyReply(r, links, answer) {
   return c.id;
 }
 
+// "Find an email": what happened to emails whose SUBJECT contains some words?
+// Reports only yes/no facts, never names or contents (GitHub logs are public).
+async function findEmails(words) {
+  await loadExistingCalls();
+  for (let i = 0; i < accounts.length; i++) {
+    const client = new ImapFlow({ host: "imap.mail.yahoo.com", port: 993, secure: true, auth: { user: accounts[i].email, pass: accounts[i].password }, logger: false });
+    await client.connect();
+    for (const folder of ["INBOX", "Bulk"]) {
+      let lock;
+      try { lock = await client.getMailboxLock(folder); } catch (e) { continue; }
+      try {
+        const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+        const uids = await client.search({ since: since, subject: words }, { uid: true }) || [];
+        if (!uids.length) { report("notice", `Find · account ${i + 1} · ${folder}`, "No email with those words in the subject (last 14 days)."); continue; }
+        for (const uid of uids.slice(0, 5)) {
+          const msg = await client.fetchOne(uid, { envelope: true, source: true }, { uid: true });
+          const env = msg.envelope || {}; const from = (env.from && env.from[0]) || {};
+          const mail = await simpleParser(msg.source);
+          const text = mail.html ? htmlToText(mail.html) : (mail.text || "");
+          const key = emailKey(env.messageId || accounts[i].email + ":" + uid);
+          const seen = await db.collection("processed").doc(key).get();
+          const callId = seen.exists ? seen.data().call : null;
+          const inApp = callId ? (await db.collection("calls").doc(callId).get()).exists : false;
+          const r = parseEmail({ subject: env.subject || "", fromName: from.name, fromEmail: from.address, text, received: londonDate(mail.date) });
+          report("notice", `Find · account ${i + 1} · ${folder}`, [
+            "arrived " + londonDate(mail.date),
+            "sender is a known agency: " + (isFromCastingAgency(from.name, from.address, knownAgencies) ? "yes" : "NO"),
+            "type: " + (classifyEmail(env.subject || "", text) || "not a call"),
+            "robot has seen it: " + (seen.exists ? "yes" : "no"),
+            "call in the app: " + (inApp ? "yes" : (callId ? "it was deleted" : "no")),
+            "production name found: " + (r.project ? "yes" : "no"),
+            "dates found: " + r.dates.length,
+            "reply link: " + (extractLinks(mail.html || "").some(l => /epcastingportal/i.test(l.url)) ? "EP page" : "none"),
+          ].join(" · "));
+        }
+      } finally { lock.release(); }
+    }
+    await client.logout();
+  }
+}
+
 async function checkAccount(account) {
   const counts = { looked: 0, alreadySeen: 0, notACall: 0, added: 0, updated: 0 };
   const client = new ImapFlow({
@@ -249,8 +372,20 @@ async function checkAccount(account) {
     socketTimeout: 120000,
   });
   await client.connect();
-  const lock = await client.getMailboxLock("INBOX");
   try {
+    for (const folder of ["INBOX", "Bulk"]) {          // agency emails sometimes land in Spam ("Bulk")
+      let lock;
+      try { lock = await client.getMailboxLock(folder); } catch (e) { continue; }
+      try { await checkFolder(client, account, counts); } finally { lock.release(); }
+    }
+  } finally {
+    await client.logout();
+  }
+  return counts;
+}
+
+async function checkFolder(client, account, counts) {
+  {
     const since = new Date(Date.now() - DAYS_BACK * 24 * 60 * 60 * 1000);
 
     // 1) read only the envelopes (sender, subject, ID) of recent emails: small and fast
@@ -340,17 +475,14 @@ async function checkAccount(account) {
         call.reviewReason = (call.reviewReason ? call.reviewReason + ". " : "") + "You already have a call for this production from this agency";
       }
       const callId = "e" + key;
+      await enrichFromPortal(call);                   // EP message page: real name, all dates, your answers
       await db.collection("calls").doc(callId).set(call);
       await seenRef.set({ at: new Date().toISOString(), call: callId });
       existingCalls.push({ id: callId, ...call });
       counts.added++;
       await notifyPhone(call);
     }
-  } finally {
-    lock.release();
-    await client.logout();
   }
-  return counts;
 }
 
 (async () => {
@@ -410,6 +542,8 @@ async function checkAccount(account) {
     report("notice", "Clean-up", `Removed ${removed} emails that were not availability checks; ${repaired} booking/release emails applied to their calls; ${flagged} marked "check details" because you had booked them.`);
   }
 
+  if (process.env.FIND) { await findEmails(process.env.FIND); process.exit(0); }
+
   let failed = false;
   for (let i = 0; i < accounts.length; i++) {
     try {
@@ -429,6 +563,11 @@ async function checkAccount(account) {
                 : (err.code || err.name || "unknown error") + (err.responseText ? " - " + String(err.responseText).slice(0, 120) : "");
       report("error", `Account ${i + 1}`, "Could not check this inbox: " + why);
     }
+  }
+  try { await refreshPendingPortalPages(); } catch (e) { report("warning", "EP pages", "Could not refresh EP pages (" + (e.code || e.name) + ")."); }
+  if (portal.read + portal.failed + portal.login) {
+    report("notice", "EP pages", `Read ${portal.read} EP message pages, ${portal.answered} answers picked up` +
+      (portal.failed ? `, ${portal.failed} could not be opened` : "") + (portal.login ? `, ${portal.login} asked for a login` : "") + ".");
   }
   process.exit(failed ? 1 : 0);
 })();

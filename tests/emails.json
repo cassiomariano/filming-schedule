@@ -307,5 +307,37 @@
   "expect": {
    "isCall": false
   }
+ },
+ {
+  "name": "Extra People Bluescreen (EP message page)",
+  "email": {
+   "subject": "Availability request for a new TV SERIES! Please reply ASAP",
+   "fromName": "ExtraPeople",
+   "fromEmail": "noreply@extrapeople.uk.epcastingportal.com",
+   "received": "2026-10-01",
+   "html": "<h4>Availability request for a new TV SERIES! Please reply ASAP</h4>\n<div class=\"alert\">Thank you! We have successfully recorded your response.</div>\n<p>Hello there!</p><p>You have an availability enquiry for:</p><p>Bluescreen</p><p>Please respond before:</p><p>Tomorrow, Friday 02 Oct 09:00</p>\n<p>We are working on a new TV show and were wondering if you can help?</p>\n<p><u>Rehearsal Dates</u></p><p>28th &amp; 29th October in Epsom</p>\n<p><u>Filming Dates</u></p><p>30th October in Epsom</p><p>2nd to 6th November in Epsom</p><p>9th to 13th November in Epsom</p>\n<p><b>Call times could be as early as 6am each day.</b></p><p>Call time: To be confirmed</p><p>Rate: PACT/FAA agreement</p><p>Fees: 20% commission plus VAT</p>\n<h3>Availability request</h3><h4>Mandatory dates</h4><h4>Availability for all these dates</h4>\n<table><tr><td><b>28 Oct 2026</b><br>(Rehearsals in Epsom)</td><td><input type=\"radio\" name=\"a\" checked disabled> Available <input type=\"radio\" name=\"a\" disabled> Not available</td></tr>\n<tr><td><b>29 Oct 2026</b><br>(Rehearsals in Epsom)</td></tr><tr><td><b>30 Oct 2026</b><br>(Filming in Epsom)</td></tr></table>\n<h3>Questions</h3><p>Where are you based?</p><input type=\"text\" value=\"London\" disabled>\n<p>How would you be travelling?</p><label><input type=\"radio\" checked disabled> Driving</label><label><input type=\"radio\" disabled> Public Transport</label>\n<p>Sent by ExtraPeople</p>",
+   "text": ""
+  },
+  "expect": {
+   "isCall": true,
+   "project": "Bluescreen",
+   "agency": "Extra People",
+   "respondBy": "2026-10-02T09:00",
+   "dates": [
+    "2026-10-28 reh",
+    "2026-10-29 reh",
+    "2026-10-30 film",
+    "2026-11-02 film",
+    "2026-11-03 film",
+    "2026-11-04 film",
+    "2026-11-05 film",
+    "2026-11-06 film",
+    "2026-11-09 film",
+    "2026-11-10 film",
+    "2026-11-11 film",
+    "2026-11-12 film",
+    "2026-11-13 film"
+   ]
+  }
  }
 ]

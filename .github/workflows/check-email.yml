@@ -20,6 +20,9 @@ on:
         description: "Send a test notification to my phone"
         type: boolean
         default: false
+      find:
+        description: "Find an email: words from its subject (reports only yes/no facts)"
+        default: ""
 
 concurrency:
   group: check-email             # never run two checks at the same time
@@ -41,6 +44,7 @@ jobs:
           CLEANUP: ${{ github.event.inputs.cleanup || 'false' }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           TEST_ALERT: ${{ github.event.inputs.test_alert || 'false' }}
+          FIND: ${{ github.event.inputs.find || '' }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           YAHOO_EMAIL_1: ${{ secrets.YAHOO_EMAIL_1 }}
           YAHOO_APP_PASSWORD_1: ${{ secrets.YAHOO_APP_PASSWORD_1 }}

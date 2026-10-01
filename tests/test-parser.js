@@ -9,7 +9,8 @@ let failed = 0;
 
 for (const c of cases) {
   // the robot needs both: sent by a casting agency, and reads like an availability check
-  const isCall = isFromCastingAgency(c.email.fromName, c.email.fromEmail, ["Casting Collective"]) && isAvailabilityCheck(c.email.subject, c.email.text);
+  const body = c.email.text || require("../parser.js").htmlToText(c.email.html || "");
+  const isCall = isFromCastingAgency(c.email.fromName, c.email.fromEmail, ["Casting Collective"]) && isAvailabilityCheck(c.email.subject, body);
   if (isCall !== c.expect.isCall) {
     console.log(`✗ ${c.name}: isCall should be ${c.expect.isCall}`);
     failed++;

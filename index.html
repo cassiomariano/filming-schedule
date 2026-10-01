@@ -158,6 +158,9 @@ h3.wk{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transfo
 .upday.off{text-decoration:line-through;font-weight:400}
 .upday.upclash{border-color:var(--clash);box-shadow:inset 0 0 0 1px var(--clash)}
 .upacts{display:flex;gap:6px;flex-wrap:wrap}
+details.answers{font-size:12.5px;color:var(--muted)}
+details.answers summary{cursor:pointer}
+details.answers ul,.anslist{margin:4px 0 0;padding-left:18px;font-size:13px}
 .outside{display:inline-block;font-family:var(--f-mono);font-size:10.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:#fff;background:var(--attn);border-radius:4px;padding:1px 6px;white-space:nowrap}
 .maplink{font-size:12px;color:var(--accent);white-space:nowrap}
 .muted{color:var(--faint)}
@@ -546,7 +549,7 @@ function renderCalendar(){
       const dd = parse(d);
       h += `<div class="aday${d===TODAY?" today":""}" id="d-${d}"><div class="adate"><b>${dd.getDate()}</b><span>${DOW[(dd.getDay()+6)%7]} ${MONTHS[dd.getMonth()].slice(0,3)}</span></div><div class="alist">`;
       if (cl.has(d)) h += `<div class="clash-row">⚠ Clash — a confirmed booking overlaps ${cl.get(d).length-1} other call${cl.get(d).length>2?"s":""}</div>`;
-      items.forEach(({c,e}) => { const ds = dayStatus(c,e); h += `<button class="acard" data-open="${c.id}"><span class="bar8 ${clsS(ds)}"></span><span class="main"><span class="ttl"${STRUCK.has(ds)?' style="text-decoration:line-through"':''}>${e.night?"☾ ":""}${esc(nameOf(c))}${ds!==c.status?` <span class="pill ${clsS(ds)}">day ${SMAP[ds].short.toLowerCase()}</span>`:""}${c.attention?` <span class="flag">● attention</span>`:""}</span><span class="sub">${esc([c.agency, c.role, e.loc || (e.kind==="fit"?c.fitLocation:c.filmLocation) || c.location].filter(Boolean).join(" · "))}</span></span><span class="kind">${e.kind==="fit"?"Fitting":"Shoot"}</span></button>`; });
+      items.forEach(({c,e}) => { const ds = dayStatus(c,e); h += `<button class="acard" data-open="${c.id}"><span class="bar8 ${clsS(ds)}"></span><span class="main"><span class="ttl"${STRUCK.has(ds)?' style="text-decoration:line-through"':''}>${e.night?"☾ ":""}${esc(nameOf(c))}${ds!==c.status?` <span class="pill ${clsS(ds)}">day ${SMAP[ds].short.toLowerCase()}</span>`:""}${c.attention?` <span class="flag">● attention</span>`:""}</span><span class="sub">${esc([c.agency, c.role, e.loc || (e.kind==="fit"?c.fitLocation:c.filmLocation) || c.location].filter(Boolean).join(" · "))}</span></span><span class="kind">${kindName(e.kind)}</span></button>`; });
       h += `</div></div>`;
     }
     if (!any) h += `<div class="empty"><h2>Nothing scheduled</h2><p>No dates for the selected statuses between ${fmtDM(from)} and ${fmtDM(to)}.</p></div>`;
@@ -554,6 +557,12 @@ function renderCalendar(){
   }
   main.innerHTML = h;
 }
+/* day types: shoot, fitting, rehearsal */
+const KIND = {film:["Shoot","SHOOT","S"], fit:["Fitting","FIT","F"], reh:["Rehearsal","REH","R"]};
+const kindName = k => (KIND[k] || KIND.film)[0];
+const kindTag  = k => (KIND[k] || KIND.film)[1];
+const kindLetter = k => (KIND[k] || KIND.film)[2];
+
 /* where you go on a given day: call-time place, else the day's place, else the call's */
 function placeOf(c, e){ return e.callPlace || e.loc || (e.kind==="fit" ? c.fitLocation : c.filmLocation) || c.location || ""; }
 function outsideBadge(place){
@@ -587,7 +596,7 @@ function renderBooked(){
     h += `<section class="nextjob" data-open="${next.c.id}" role="button" tabindex="0">
       <span class="lbl">Your next job · ${daysAway(next.e.d)}</span>
       <h2>${esc(nameOf(next.c))}</h2>
-      <div class="nj-line"><b>${fmtShort(next.e.d)}</b>${next.e.kind==="fit"?" · Fitting":""}${next.e.callTime?` · Call <b>${esc(next.e.callTime)}</b>`:` · <span class="muted">call time not in yet</span>`}${pl?` · ${esc(pl)}`:""} ${outsideBadge(pl)}</div>
+      <div class="nj-line"><b>${fmtShort(next.e.d)}</b>${next.e.kind!=="film"?" · "+kindName(next.e.kind):""}${next.e.callTime?` · Call <b>${esc(next.e.callTime)}</b>`:` · <span class="muted">call time not in yet</span>`}${pl?` · ${esc(pl)}`:""} ${outsideBadge(pl)}</div>
     </section>`;
   }
   h += `<div class="bar"><span class="src">${ahead.length} booked day${ahead.length===1?"":"s"} ahead${outside?` · <b style="color:var(--attn)">${outside} outside London</b>`:""}</span><span style="flex:1"></span>
@@ -601,7 +610,7 @@ function renderBooked(){
       h += `<div class="brow${e.d < TODAY ? " past" : ""}">
         <div class="bdate"><button type="button" class="upday ${clsS(st)}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${DAY_TIP}">${fmtShort(e.d)}${st==="done"?" ✓":""}</button><small>${daysAway(e.d)}</small></div>
         <div class="btime">${e.callTime ? `<b>${esc(e.callTime)}</b>` : `<span class="muted">waiting for call time</span>`}${e.night ? " ☾" : ""}</div>
-        <div class="bprod" data-open="${c.id}" role="button" tabindex="0"><b>${esc(nameOf(c))}</b> <span class="kind">${e.kind==="fit"?"Fitting":"Shoot"}</span><small>${esc([c.agency, c.role].filter(Boolean).join(" · "))}</small></div>
+        <div class="bprod" data-open="${c.id}" role="button" tabindex="0"><b>${esc(nameOf(c))}</b> <span class="kind">${kindName(e.kind)}</span><small>${esc([c.agency, c.role].filter(Boolean).join(" · "))}</small></div>
         <div class="bplace">${pl ? esc(pl) : `<span class="muted">location not known</span>`} ${mapLink(pl)} ${outsideBadge(pl)}</div>
       </div>`;
     }
@@ -659,7 +668,7 @@ function upCard(c, cl){
   const line = kind => {
     const list = days.filter(e => e.kind === kind);
     if (!list.length) return "";
-    return `<div class="uprow"><span class="uplab">${kind==="fit"?"Fitting":"Shoot"}</span><span class="updays">${list.map(e => {
+    return `<div class="uprow"><span class="uplab">${kindName(kind)}</span><span class="updays">${list.map(e => {
       const st = dayStatus(c,e); const off = st==="released"||st==="canceled";
       const where = placeOf(c, e);
       return `<button type="button" class="upday ${clsS(st)}${off?" off":""}${cl.has(e.d)&&!off?" upclash":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${esc(SMAP[st]?.label||"")}${cl.has(e.d)?" · clash with another call":""} · ${DAY_TIP}">${fmtShort(e.d)}${e.night?" ☾":""}${e.callTime?` <small>· call ${esc(e.callTime)}</small>`:""}${where?` <small>@ ${esc(where)}</small>`:""}${off?` <small>(${st})</small>`:""}${st==="done"?" ✓ worked":""}</button>`;
@@ -673,15 +682,16 @@ function upCard(c, cl){
       <h4>${esc(nameOf(c))}</h4>
       <div class="upmeta">${outsideBadge(c.location || c.filmLocation || c.fitLocation || (c.dates||[]).map(e=>e.loc).find(Boolean) || "")} ${esc([c.agency, c.role].filter(Boolean).join(" · "))}${du?` · <b class="due${du.late?" late":""}">${esc(du.txt)}</b>`:""}${c.review?` · <b style="color:var(--accent)">check details</b>`:""}</div>
     </div>
-    ${line("fit")}${line("film")}
+    ${line("fit")}${line("reh")}${line("film")}
+    ${(c.answers||[]).length ? `<details class="answers"><summary>Your answers on the agency page</summary><ul>${c.answers.map(a => `<li>${esc(a)}</li>`).join("")}</ul></details>` : ""}
     ${acts?`<div class="upacts">${acts}</div>`:""}
   </article>`;
 }
 
 function evHTML({c,e}){
   const ds = dayStatus(c, e);
-  const title = `${nameOf(c)} — ${e.kind==="fit"?"Fitting":"Shoot"}${e.night?" (night)":""} · ${SMAP[ds]?.short||""}${ds!==c.status?" (this day)":""}${c.agency?" · "+c.agency:""}`;
-  return `<button class="ev ${clsS(ds)}${c.attention?" attn":""}${STRUCK.has(ds)?" x":""}" data-open="${c.id}" title="${esc(title)}"><span class="k">${e.kind==="fit"?"FIT":"SHOOT"}</span><span class="t">${esc(nameOf(c))}</span>${e.night?`<span class="m" aria-label="night">☾</span>`:""}${ds==="confirmed"?`<span class="m" aria-label="booked">✓</span>`:ds==="pending"?`<span class="m" aria-label="reply needed">!</span>`:""}</button>`;
+  const title = `${nameOf(c)} — ${kindName(e.kind)}${e.night?" (night)":""} · ${SMAP[ds]?.short||""}${ds!==c.status?" (this day)":""}${c.agency?" · "+c.agency:""}`;
+  return `<button class="ev ${clsS(ds)}${c.attention?" attn":""}${STRUCK.has(ds)?" x":""}" data-open="${c.id}" title="${esc(title)}"><span class="k">${kindTag(e.kind)}</span><span class="t">${esc(nameOf(c))}</span>${e.night?`<span class="m" aria-label="night">☾</span>`:""}${ds==="confirmed"?`<span class="m" aria-label="booked">✓</span>`:ds==="pending"?`<span class="m" aria-label="reply needed">!</span>`:""}</button>`;
 }
 
 function renderCalls(){
@@ -717,7 +727,7 @@ function renderCalls(){
       <div class="body" data-open="${c.id}" role="button" tabindex="0">
         <div class="line1"><span class="proj">${esc(nameOf(c))}</span><span class="pill ${clsS(c.status)}">${SMAP[c.status]?.short||c.status}</span>${c.attention?`<span class="flag">● Attention</span>`:""}</div>
         <div class="meta">${c.agency?`<span><b>${esc(c.agency)}</b></span>`:""}${c.role?`<span>${esc(c.role)}</span>`:""}${(c.location||c.filmLocation)?`<span>📍 ${esc(c.location||c.filmLocation)}</span>`:""}${c.received?`<span>Received ${fmtDM(c.received)}</span>`:""}</div>
-        ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"; return `<button type="button" class="dchip ${clsS(st)} ${e.kind}${off?" off":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${e.kind==="fit"?"Fitting":"Shoot"} · ${SMAP[st].short} · ${DAY_TIP}">${e.kind==="fit"?"F ":""}${fmtDM(e.d)}${e.night?" ☾":""}${st==="done"?" ✓":""}</button>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
+        ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"; return `<button type="button" class="dchip ${clsS(st)} ${e.kind}${off?" off":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${kindName(e.kind)} · ${SMAP[st].short} · ${DAY_TIP}">${e.kind!=="film"?kindLetter(e.kind)+" ":""}${fmtDM(e.d)}${e.night?" ☾":""}${st==="done"?" ✓":""}</button>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
         ${du?`<span class="due${du.late?" late":""}">${esc(du.txt)}</span>`:""}
       </div>
       <div class="acts">${replyHTML(c)}${c.status==="confirmed" && lastDate(c) && lastDate(c) < TODAY ? `<button class="btn small" data-set="done" data-id="${c.id}">Mark done</button>` : ""}</div>
@@ -858,7 +868,7 @@ function drawEditor(){
           const showLoc = !!(e.loc || e.callPlace || e.callTime) || openLoc.has(i);
           return `<div class="drow" data-i="${i}">
             <input class="inp dd" type="date" id="dd-${i}" value="${e.d}" aria-label="Date">
-            <select class="inp dk" id="dk-${i}" aria-label="Fitting or shoot"><option value="film"${e.kind==="film"?" selected":""}>Shoot</option><option value="fit"${e.kind==="fit"?" selected":""}>Fit</option></select>
+            <select class="inp dk" id="dk-${i}" aria-label="Fitting or shoot"><option value="film"${e.kind==="film"?" selected":""}>Shoot</option><option value="fit"${e.kind==="fit"?" selected":""}>Fit</option><option value="reh"${e.kind==="reh"?" selected":""}>Rehearsal</option></select>
             <select class="inp dst dst-${st||"auto"}" id="dst-${i}" aria-label="What happened this day"><option value=""${st===""?" selected":""}>Auto</option><option value="worked"${st==="worked"?" selected":""}>Done ✓</option><option value="canceled"${st==="canceled"?" selected":""}>Canceled</option><option value="released"${st==="released"?" selected":""}>Released</option></select>
             <label class="ibtn" title="Night shoot"><input type="checkbox" id="dn-${i}" ${e.night?"checked":""}><span aria-hidden="true">☾</span><span class="sr">Night</span></label>
             <button type="button" class="ibtn${showLoc?" on":""}" data-showloc="${i}" title="Place and call time for this day" aria-label="Place and call time">📍</button>
@@ -878,6 +888,7 @@ function drawEditor(){
           <div class="fld"><label for="f-notes">Notes</label><textarea class="inp" id="f-notes">${esc(d.notes)}</textarea></div>
         </div>
       </details>
+      ${(d.answers||[]).length ? `<div class="fld"><span class="lbl">Your answers on the agency page</span><ul class="anslist">${d.answers.map(a => `<li>${esc(a)}</li>`).join("")}</ul></div>` : ""}
       ${draftId && (d.links||[]).length ? `<div class="fld"><span class="lbl">Agency reply links</span><div style="display:flex;gap:6px;flex-wrap:wrap">${d.links.map(l => `<a class="btn small" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.kind==="yes"?"✓ "+l.text:l.kind==="no"?"✕ "+l.text:"Reply to agency")} ↗</a>`).join("")}</div></div>` : ""}
       ${d.rawEmail ? `<details class="more"><summary>Original email</summary><pre class="raw">${esc(d.rawEmail)}</pre></details>` : ""}
       ${draftId ? `<div class="src">Source: ${esc(d.source||"")}${d.updatedAt?` · updated ${esc(d.updatedAt.slice(0,16).replace("T"," "))}`:""}</div>` : ""}

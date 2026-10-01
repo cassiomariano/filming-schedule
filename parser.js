@@ -103,6 +103,13 @@
     var s = String(html || "");
     s = s.replace(/<(script|style|head)[\s\S]*?<\/\1>/gi, " ");
     s = s.replace(/<img[^>]*alt="([^"]*)"[^>]*>/gi, " $1 ");
+    // form fields on reply pages: ticked = ☒, not ticked = ☐, typed answers keep their value
+    s = s.replace(/<input\b[^>]*>/gi, function (tag) {
+      if (/type\s*=\s*["']?(radio|checkbox)/i.test(tag)) return /\bchecked\b/i.test(tag) ? " ☒ " : " ☐ ";
+      var v = tag.match(/\bvalue\s*=\s*["']([^"']*)["']/i);
+      return /type\s*=\s*["']?(hidden|submit|button)/i.test(tag) || !v ? " " : " " + v[1] + " ";
+    });
+    s = s.replace(/<textarea[^>]*>([\s\S]*?)<\/textarea>/gi, " $1 ");
     s = s.replace(/<br\s*\/?>/gi, "\n");
     s = s.replace(/<\/(p|div|tr|li|h\d|table|ul|ol)>/gi, "\n");
     s = s.replace(/<\/t[dh]>/gi, " | ");
@@ -272,10 +279,14 @@
 
   // ---------- reply deadline ----------
   function findRespondBy(lines, received) {
-    var re = new RegExp("\\bby\\s+(?:today,?\\s+)?(?:[a-z]+day,?\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+" + MON + "[a-z]*\\.?(?:\\s+(\\d{4}))?,?\\s+(?:at\\s+)?(\\d{1,2})[:.](\\d{2})", "i");
+    var re = new RegExp("\\bby\\s+(?:to(?:day|morrow),?\\s+)?(?:[a-z]+day,?\\s+)?(\\d{1,2})(?:st|nd|rd|th)?\\s+" + MON + "[a-z]*\\.?(?:\\s+(\\d{4}))?,?\\s+(?:at\\s+)?(\\d{1,2})[:.](\\d{2})", "i");
     for (var i = 0; i < lines.length; i++) {
       if (!/expire|respond|reply|deadline/i.test(lines[i])) continue;
-      var m = lines[i].match(re);
+      var line = lines[i];
+      if (/before:?\s*$/i.test(line)) {                  // the date is on the next line
+        for (var j = i + 1; j < lines.length && j < i + 4; j++) if (lines[j]) { line = "by " + lines[j]; break; }
+      }
+      var m = line.replace(/\bbefore\b/i, "by").match(re);
       if (m) {
         var d = +m[1], mo = monthNumber(m[2]);
         var y = m[3] ? +m[3] : guessYear(mo, d, received);
@@ -300,10 +311,16 @@
       // (tables put several cells on one line, separated by "|": each cell can be a heading)
       var cells = line.split("|");
       for (var c = 0; c < cells.length; c++) {
-        if (/^\W*(costume\s+)?fit(ting)?s?\b/i.test(cells[c])) mode = "fit";
+        if (/^\W*rehears/i.test(cells[c])) mode = "reh";
+        else if (/^\W*(costume\s+)?fit(ting)?s?\b/i.test(cells[c])) mode = "fit";
         else if (/^\W*(film(ing)?|shoot(ing)?|dates?|shoot dates?|filming dates?|production dates?)\b/i.test(cells[c])) mode = "film";
       }
       if (i > 0 && skip.test(line)) continue;
+      // the reply deadline on the line after "Please respond before:" is not a work day
+      var prev = (all[i - 1] || "") || (all[i - 2] || "");
+      if (i > 0 && /(respond|reply) before:?\s*$|deadline:?\s*$|expires?:?\s*$/i.test(prev)) continue;
+      // EP pages put "(Rehearsals in Epsom)" on the line under the date: read them together
+      if (all[i + 1] && /^\(/.test(all[i + 1]) && /\d/.test(line)) { line = line + " " + all[i + 1]; lower = line.toLowerCase(); i++; }
 
       var found = [], pendingOrdinals = [], m;
       DATE_RE.lastIndex = 0;
@@ -332,6 +349,14 @@
       pendingOrdinals.forEach(function (o) {
         if (lastMonth) found.push({ d: o.d, mo: lastMonth, y: lastYear, at: o.at });
       });
+      // ranges: "2nd to 6th November", "9th - 13th Nov", "Mon 2 - Fri 6 Nov"
+      var RANGE = new RegExp("\\b(\\d{1,2})(?:st|nd|rd|th)?\\s*(?:-|–|to|until|till|through|thru)\\s*(?:[a-z]{3,9}\\s+)?(\\d{1,2})(?:st|nd|rd|th)?(?:\\s+of)?\\s+" + MON + "\\b(?:\\s+(\\d{4}))?", "gi");
+      var r;
+      while ((r = RANGE.exec(line))) {
+        var a = +r[1], b = +r[2], rmo = monthNumber(r[3]), ry = r[4] ? +r[4] : null;
+        if (rmo && b > a && b - a <= 31) for (var dd = a; dd <= b; dd++) found.push({ d: dd, mo: rmo, y: ry, at: r.index });
+        lastMonth = rmo;
+      }
 
       for (var k = 0; k < found.length; k++) {
         var f = found[k];
@@ -341,14 +366,24 @@
         var before = lower.slice(0, f.at);
         var fitPos = Math.max(before.lastIndexOf("fit"), before.lastIndexOf("costume"));
         var filmPos = Math.max(before.lastIndexOf("film"), before.lastIndexOf("shoot"));
+        var rehPos = before.lastIndexOf("rehears");
         var kind = mode;
-        if (fitPos > filmPos) kind = "fit";
+        if (rehPos > fitPos && rehPos > filmPos) kind = "reh";
+        else if (fitPos > filmPos) kind = "fit";
         else if (filmPos > fitPos) kind = "film";
+        else if (/rehears/i.test(line)) kind = "reh";
         else if (/\bfit(ting)?s?\b/i.test(line) && !/film|shoot/i.test(line)) kind = "fit";
 
         var entry = { d: toKey(year, f.mo, f.d), kind: kind };
         var at = line.slice(f.at).match(/@\s*([^(|]+?)(?:\s*\(|\s+-\s|\s*\||\s+\d{3,4}\s*-|$)/);
         if (at) entry.loc = clean(at[1]).slice(0, 60);
+        if (!entry.loc) {                                 // "30th October in Epsom", "(Filming in Epsom)"
+          var inPlace = line.slice(f.at).match(/\b(?:in|at)\s+([A-Z][A-Za-z'’.-]+(?:\s+[A-Z][A-Za-z'’.-]+){0,3})/);
+          if (inPlace && !/^(the|a|an)$/i.test(inPlace[1])) entry.loc = inPlace[1].slice(0, 60);
+        }
+        // your answer on an EP page: "☒ Available ☐ Not available"
+        if (/☒\s*not available/i.test(line)) entry.answer = "no";
+        else if (/☒\s*available/i.test(line)) entry.answer = "yes";
         if (/night/i.test(line)) entry.night = true;
         var id = entry.d + entry.kind;
         if (seen[id]) {                       // same day again: keep extra details
@@ -372,14 +407,17 @@
     var subject = email.subject || "";
     var lines = text.split("\n").map(function (l) { return l.trim(); });
 
-    var project = field(lines, ["Project Title", "Project", "Production", "Company"]) || projectFromSubject(subject);
-    if (!project) {
-      for (var i = 0; i < lines.length - 1; i++) {
-        if (/availability enquiry for:?\s*$/i.test(lines[i])) {
+    var project = field(lines, ["Project Title", "Project", "Production", "Company"]);
+    if (!project) {                          // Entertainment Partners: "You have an availability enquiry for:" + name
+      for (var i = 0; i < lines.length - 1 && !project; i++) {
+        if (/availability (enquiry|request) for:?\s*$/i.test(lines[i])) {
           for (var j = i + 1; j < lines.length && j < i + 4; j++) if (lines[j]) { project = lines[j]; break; }
         }
       }
     }
+    if (!project) project = projectFromSubject(subject);
+    // "a new TV SERIES! Please reply ASAP" describes the job, it is not its name
+    if (/^(a|an|the)?\s*(new|major|big|exciting|urgent|top)\b|please (reply|view|respond)|asap/i.test(project || "")) project = "";
     var mp = !project && text.match(/new project\s*\**\s*([^*.\n]+?)\s*\**\s*[.\n]/i);
     if (mp) project = mp[1];
     project = clean(project).replace(/\s*\(.*?\)\s*$/, "").slice(0, 80);
