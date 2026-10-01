@@ -154,7 +154,9 @@ async function checkAccount(account) {
   try {
     await db.collection("processed").limit(1).get();
   } catch (err) {
-    report("error", "Database", "Can't open the Firebase database (" + (err.code || err.name) + "): " + String(err.message || "").slice(0, 200));
+    const who = String(serviceAccount.client_email || "").split("@")[0].replace(/-[a-z0-9]{5}$/, "-…");
+    report("error", "Database", "Can't open the Firebase database (" + (err.code || err.name) + "): " + String(err.message || "").slice(0, 160) +
+      " | key is for project '" + serviceAccount.project_id + "', account type '" + who + "'");
     process.exit(1);
   }
   let failed = false;
