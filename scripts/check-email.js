@@ -537,8 +537,29 @@ async function checkFolder(client, account, counts) {
         removed++;
       }
     }
+    // Re-read calls the robot made earlier with today's better reader + the EP message page,
+    // as long as you haven't changed them (no day marked done/canceled, not booked yet).
     existingCalls = null;
     await loadExistingCalls();
+    let reread = 0;
+    for (const c of existingCalls) {
+      if (!String(c.source || "").startsWith("email") || !["pending", "available"].includes(c.status)) continue;
+      if ((c.dates || []).some(e => e.state || e.callTime)) continue;
+      const m = String(c.emailFrom || "").match(/^(.*?)\s*<([^>]*)>/) || [];
+      const body = String(c.rawEmail || "").split("\n").slice(2).join("\n");
+      const r = parseEmail({ subject: c.emailSubject || "", fromName: m[1], fromEmail: m[2], text: body, received: c.received });
+      const copy = { ...c, project: r.project || "", dates: r.dates, respondBy: r.respondBy || c.respondBy || null,
+                     role: c.role || r.role, rate: c.rate || r.rate, location: c.location || r.location };
+      if (!r.project) copy.review = true;
+      await enrichFromPortal(copy);
+      if (!copy.project) copy.project = c.project && !/please (reply|view)|asap/i.test(c.project) ? c.project : "";
+      const { id, ...body2 } = copy;
+      await db.collection("calls").doc(c.id).set({ ...body2, updatedAt: new Date().toISOString() });
+      reread++;
+    }
+    existingCalls = null;
+    await loadExistingCalls();
+    report("notice", "Re-read", `Re-read ${reread} calls with the improved reader.`);
     report("notice", "Clean-up", `Removed ${removed} emails that were not availability checks; ${repaired} booking/release emails applied to their calls; ${flagged} marked "check details" because you had booked them.`);
   }
 
