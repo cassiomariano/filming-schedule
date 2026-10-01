@@ -16,6 +16,10 @@ on:
         description: "Also remove wrongly added calls (not from casting agencies)"
         type: boolean
         default: false
+      test_alert:
+        description: "Send a test notification to my phone"
+        type: boolean
+        default: false
 
 concurrency:
   group: check-email             # never run two checks at the same time
@@ -36,6 +40,7 @@ jobs:
           DAYS_BACK: ${{ github.event.inputs.days_back || '2' }}
           CLEANUP: ${{ github.event.inputs.cleanup || 'false' }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TEST_ALERT: ${{ github.event.inputs.test_alert || 'false' }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           YAHOO_EMAIL_1: ${{ secrets.YAHOO_EMAIL_1 }}
           YAHOO_APP_PASSWORD_1: ${{ secrets.YAHOO_APP_PASSWORD_1 }}

@@ -237,6 +237,16 @@ async function checkAccount(account) {
   }
   knownAgencies = await getKnownAgencies();
 
+  // "Send a test alert" (ticked by hand when running the workflow)
+  if (process.env.TEST_ALERT === "true") {
+    if (!process.env.NTFY_TOPIC) report("error", "Phone", "No NTFY_TOPIC secret yet, so no alert was sent (SETUP.md, Faster checks, step C).");
+    else {
+      await notifyPhone({ project: "Test alert", agency: "Filming Schedule", role: "If you can read this, phone alerts work",
+                          dates: [{ d: new Date().toISOString().slice(0, 10), kind: "film" }] });
+      report("notice", "Phone", "Test alert sent.");
+    }
+  }
+
   // Clean-up (run by hand with "clean up" ticked): remove calls the robot added from
   // senders that are not casting agencies, if you haven't changed them yet.
   if (process.env.CLEANUP === "true") {
