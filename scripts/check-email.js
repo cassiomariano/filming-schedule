@@ -183,7 +183,9 @@ async function notifyPhone(call) {
 // job (some jobs are booked without an availability email). Returns the call's id, or null.
 async function applyStatusEmail(kind, r, subject, received, skipId, links, source) {
   await loadExistingCalls();
-  const open = existingCalls.filter(c => c.id && c.id !== skipId && ["pending", "available", "confirmed", "released"].includes(c.status));
+  // a booking is the final word, so it can also revive a job marked declined, canceled or expired
+  const okStatus = kind === "booked" ? ["pending", "available", "confirmed", "released", "declined", "canceled", "expired"] : ["pending", "available", "confirmed", "released"];
+  const open = existingCalls.filter(c => c.id && c.id !== skipId && okStatus.includes(c.status));
   const listed = new Set((r.dates || []).map(x => x.d));
   let matches = r.project ? open.filter(c => c.project && sameProject(c.project, r.project)) : [];
   if (matches.length > 1 && r.agency) matches = matches.filter(c => sameName(c.agency, r.agency));
