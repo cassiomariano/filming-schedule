@@ -853,8 +853,19 @@ function showLogin(msg){
     <div class="fld"><label for="lg-email">Email</label><input class="inp" id="lg-email" type="email" autocomplete="username" required></div>
     <div class="fld"><label for="lg-pass">Password</label><input class="inp" id="lg-pass" type="password" autocomplete="current-password" required></div>
     <button class="btn primary" type="submit" style="justify-content:center">Sign in</button>
+    <button class="btn ghost small" type="button" id="lg-forgot" style="justify-content:center">Forgot password? Email me a reset link</button>
     <div class="status-line err" id="lg-msg">${esc(msg||"")}</div>
+    <p class="src" style="margin:0">You stay signed in on this device until you press Sign out.</p>
   </form>`;
+  $("#lg-forgot").addEventListener("click", async () => {
+    const email = $("#lg-email").value.trim();
+    const out = $("#lg-msg");
+    if (!email){ out.textContent = "Type your email above first, then press this again."; return; }
+    try {
+      await firebase.auth().sendPasswordResetEmail(email);
+      out.className = "status-line"; out.textContent = "Reset link sent to " + email + ". Check your inbox (and spam), choose a new password, then sign in here.";
+    } catch (err) { out.className = "status-line err"; out.textContent = "Couldn't send the reset email. Check the address is the one you use for this app."; }
+  });
   $("#loginForm").addEventListener("submit", async e => {
     e.preventDefault();
     $("#lg-msg").textContent = "";
@@ -870,6 +881,8 @@ function showLogin(msg){
     return;
   }
   firebase.initializeApp(cfg);
+  // stay signed in on this device until "Sign out" is pressed
+  firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(() => {});
   const db = firebase.firestore();
   db.enablePersistence({synchronizeTabs: true}).catch(() => {});   // works offline too
   S.db = db;
