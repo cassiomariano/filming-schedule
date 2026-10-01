@@ -145,7 +145,9 @@
     var lines = text.split("\n").map(function (l) { return l.trim(); });
     var time = "";
     var all = (email.subject || "") + "\n" + text;
-    var m = all.match(/\bcall(?:\s*time)?\s*(?:is|at|:|-|–|@)?\s*(\d{1,2})[:.]?(\d{2})?\s*(am|pm|hrs|hours)?\b/i);
+    var m = all.match(/\bcall(?:\s*time)?\s*(?:is|at|:|-|–|@)?\s*(\d{1,2})[:.]?(\d{2})?\s*(am|pm|hrs|hours)?\b/i) ||
+            all.match(/\b(?:arrival|arrive|report(?:ing)?|check[- ]?in|sign[- ]?in|be at (?:unit )?base|be on set|start)[^\n\d]{0,30}?(\d{1,2})[:.](\d{2})\s*(am|pm|hrs|hours)?\b/i) ||
+            all.match(/\b(\d{1,2})[:.](\d{2})\s*(am|pm|hrs)\b/i);
     if (m) {
       var h = +m[1], min = m[2] ? +m[2] : 0, ap = (m[3] || "").toLowerCase();
       if (!m[2] && !ap && m[1].length <= 2 && h > 12) h = NaN;          // "call 23" alone is not a time

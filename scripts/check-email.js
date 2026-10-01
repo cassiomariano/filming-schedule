@@ -27,6 +27,22 @@ const SURVEY = process.env.SURVEY === "true";
 const survey = {};
 const SURVEY_WORDS = ["book", "confirm", "selected", "pencil", "hold", "call sheet", "call time", "callsheet", "schedule", "details", "final", "release", "cancel", "stood down", "not required", "unfortunately", "update", "change", "reminder", "fitting", "wardrobe", "costume", "travel", "tomorrow", "pay", "re:", "availability", "av ", "check", "request"];
 const epu = { found: 0, opened: 0, login: 0, booked: 0, released: 0, unclear: 0, matched: 0 };
+// Booking, release and call-time emails often don't label the production. Look for the name of
+// a job you already have in the subject (then the body); the longest name found wins.
+function norm(x) { return " " + String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() + " "; }
+function findKnownProject(subject, text) {
+  const names = [...new Set((existingCalls || []).map(c => String(c.project || "").trim()).filter(p => norm(p).trim().length >= 4))];
+  for (const hay of [norm(subject), norm(String(text || "").slice(0, 4000))]) {
+    const hits = names.filter(p => hay.includes(norm(p)));
+    if (hits.length) return hits.sort((a, b) => norm(b).length - norm(a).length)[0];
+  }
+  return "";
+}
+function knownName(r, subject, text) {
+  if (r.project && (existingCalls || []).some(c => c.project && sameProject(c.project, r.project))) return;
+  const k = findKnownProject(subject, text);
+  if (k) r.project = k;
+}
 const why = {};
 function miss(k) { why[k] = (why[k] || 0) + 1; }
 // several copies of the same job (reminders): use the one you've acted on, else the newest
@@ -625,6 +641,7 @@ async function handleMail(m, account, counts, rereading) {
   }
   if (m.seen && rereading) counts.alreadySeen++;
   const r = parseEmail({ subject, fromName: from.name, fromEmail: from.address, text, received });
+  if (kind !== "call") { await loadExistingCalls(); knownName(r, subject, text); }
   const remember = id => seenRef.set({ at: new Date().toISOString(), call: id || (m.seen && m.seen.call) || null, kind });
 
   // EP "You have booking updates": open the EP page it links to and see what changed
@@ -642,6 +659,7 @@ async function handleMail(m, account, counts, rereading) {
         const ptext = htmlToText(page);
         const r2 = parseEmail({ subject: "", fromName: from.name, fromEmail: from.address, html: page, text: "", received });
         if (!r2.agency) r2.agency = r.agency;
+        knownName(r2, "", ptext);
         const k2 = /\breleased?\b|not (required|selected|needed)|stood down|cancel+ed/i.test(ptext) ? "released"
                  : /\bbooked\b|booking confirm|confirmed/i.test(ptext) ? "booked" : null;
         if (k2) {
