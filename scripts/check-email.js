@@ -16,7 +16,7 @@ const crypto = require("crypto");
 const { ImapFlow } = require("imapflow");
 const { simpleParser } = require("mailparser");
 const admin = require("firebase-admin");
-const { parseEmail, isAvailabilityCheck, htmlToText, AGENCIES } = require("../parser.js");
+const { parseEmail, isAvailabilityCheck, isFromCastingAgency, htmlToText } = require("../parser.js");
 
 // ---------- settings (stored as GitHub secrets, never in the code) ----------
 const DAYS_BACK = Number(process.env.DAYS_BACK || 3);
@@ -77,13 +77,16 @@ async function loadExistingCalls() {
   return existingCalls;
 }
 
-// Quick first look using only the sender and subject, so the robot downloads
-// just the emails that could be casting calls (a busy inbox has hundreds of others).
-function mightBeCasting(subject, fromName, fromAddress) {
-  const who = (fromName || "") + " " + (fromAddress || "");
-  if (AGENCIES.some(a => a[1].test(who))) return true;
-  if (/casting|extras|talent|epcastingportal|spotlight|crowd|background/i.test(who)) return true;
-  return /availab|av check|enquiry|option|pencil|booking|shoot|filming|fitting|production|SAs? needed/i.test(subject || "");
+// Agency names you already have in your schedule (from the spreadsheet or added by you).
+// Calls the robot added and you haven't touched yet don't count, so a wrong one can't teach it bad habits.
+let knownAgencies = [];
+function trustedAgencies(calls) {
+  const names = new Set();
+  calls.forEach(c => {
+    const byRobot = String(c.source || "").startsWith("email");
+    if (c.agency && (!byRobot || c.status !== "pending")) names.add(c.agency);
+  });
+  return [...names];
 }
 
 async function checkAccount(account) {
@@ -107,7 +110,8 @@ async function checkAccount(account) {
       counts.looked++;
       const env = msg.envelope || {};
       const from = (env.from && env.from[0]) || {};
-      if (mightBeCasting(env.subject, from.name, from.address)) {
+      // only emails sent by a casting / extras agency (never Spotlight, shops, apps...)
+      if (isFromCastingAgency(from.name, from.address, knownAgencies)) {
         candidates.push({ uid: msg.uid, id: env.messageId || account.email + ":" + msg.uid });
       } else {
         counts.notACall++;
@@ -181,6 +185,28 @@ async function checkAccount(account) {
       " | key is for project '" + serviceAccount.project_id + "', account type '" + who + "'");
     process.exit(1);
   }
+  await loadExistingCalls();
+  knownAgencies = trustedAgencies(existingCalls);
+
+  // Clean-up (run by hand with "clean up" ticked): remove calls the robot added from
+  // senders that are not casting agencies, if you haven't changed them yet.
+  if (process.env.CLEANUP === "true") {
+    const snap = await db.collection("calls").get();
+    let removed = 0;
+    for (const doc of snap.docs) {
+      const c = doc.data();
+      if (!String(c.source || "").startsWith("email") || c.status !== "pending") continue;
+      const m = String(c.emailFrom || "").match(/^(.*?)\s*<([^>]*)>/) || [];
+      if (!isFromCastingAgency(m[1], m[2], knownAgencies) || !isAvailabilityCheck(c.emailSubject, c.rawEmail)) {
+        await doc.ref.delete();
+        removed++;
+      }
+    }
+    existingCalls = null;
+    await loadExistingCalls();
+    report("notice", "Clean-up", `Removed ${removed} calls that were not from casting agencies.`);
+  }
+
   let failed = false;
   for (let i = 0; i < accounts.length; i++) {
     try {

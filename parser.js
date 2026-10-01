@@ -33,8 +33,32 @@
     ["Precious Agency", /precious\s?agency/i],
     ["Phoenix Casting", /phoenix\s?casting/i],
     ["Creative Casting", /creative\s?cast/i],
-    ["Universal Extras", /universalextras/i]
+    ["Universal Extras", /universalextras/i],
+    ["The Artist Book", /artist\s?book/i],
+    ["Poppy Casting", /poppy\s?(casting|extras|agency)/i],
+    ["Colour Sound", /colou?r\s?sound/i],
+    ["Alessi Hartigan", /alessi\s?hartigan/i],
+    ["Greenlight", /greenlight\s?(casting|extras|agency|talent)/i],
+    ["MFS Casting", /mfs\s?casting/i],
+    ["Mixedbab", /mixedbab/i],
+    ["Phoenix Casting", /phoenix\s?(extras|agency|talent)/i]
   ];
+
+  // ---------- is the sender a casting / extras agency? ----------
+  // fromName, fromEmail: the sender. extraNames: agency names already in your schedule.
+  function isFromCastingAgency(fromName, fromEmail, extraNames) {
+    var who = (fromName || "") + " " + (fromEmail || "");
+    if (/spotlight/i.test(who)) return false;     // Spotlight has its own app
+    // Entertainment Partners' casting portal sends for most agencies (lucasextras.uk.epcastingportal.com)
+    if (/epcastingportal\.com|entertainmentpartners/i.test(fromEmail || "")) return true;
+    for (var i = 0; i < AGENCIES.length; i++) if (AGENCIES[i][1].test(who)) return true;
+    var names = extraNames || [];
+    for (var j = 0; j < names.length; j++) {
+      var n = String(names[j] || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (n.length >= 5 && who.toLowerCase().replace(/[^a-z0-9@.]/g, "").indexOf(n) !== -1) return true;
+    }
+    return false;
+  }
 
   var MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
   var MON = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
@@ -295,7 +319,7 @@
     return call;
   }
 
-  var api = { parseEmail: parseEmail, htmlToText: htmlToText, isAvailabilityCheck: isAvailabilityCheck, AGENCIES: AGENCIES };
+  var api = { parseEmail: parseEmail, htmlToText: htmlToText, isAvailabilityCheck: isAvailabilityCheck, isFromCastingAgency: isFromCastingAgency, AGENCIES: AGENCIES };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.EmailParser = api;
 })(this);

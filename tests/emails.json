@@ -203,5 +203,44 @@
   "expect": {
    "isCall": false
   }
+ },
+ {
+  "name": "AliExpress promo",
+  "email": {
+   "subject": "Your order is available for pickup",
+   "fromName": "AliExpress",
+   "fromEmail": "transaction@notice.aliexpress.com",
+   "received": "2026-09-27",
+   "text": "Your item is available. Delivery 2 Oct."
+  },
+  "expect": {
+   "isCall": false
+  }
+ },
+ {
+  "name": "Ubeya shift",
+  "email": {
+   "subject": "New shifts available near you",
+   "fromName": "Ubeya",
+   "fromEmail": "no-reply@ubeya.com",
+   "received": "2026-09-27",
+   "text": "Forest School shifts available 2 Oct, 17 Oct. Are you available?"
+  },
+  "expect": {
+   "isCall": false
+  }
+ },
+ {
+  "name": "Spotlight Link",
+  "email": {
+   "subject": "New availability request",
+   "fromName": "Spotlight Link",
+   "fromEmail": "noreply@spotlight.com",
+   "received": "2026-09-27",
+   "text": "Are you available on 14 Oct? Casting request via Spotlight Link."
+  },
+  "expect": {
+   "isCall": false
+  }
  }
 ]

@@ -10,6 +10,10 @@ on:
       days_back:
         description: "How many days of email to look at"
         default: "3"
+      cleanup:
+        description: "Also remove wrongly added calls (not from casting agencies)"
+        type: boolean
+        default: false
 
 concurrency:
   group: check-email             # never run two checks at the same time
@@ -28,6 +32,7 @@ jobs:
       - run: node scripts/check-email.js
         env:
           DAYS_BACK: ${{ github.event.inputs.days_back || '3' }}
+          CLEANUP: ${{ github.event.inputs.cleanup || 'false' }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           YAHOO_EMAIL_1: ${{ secrets.YAHOO_EMAIL_1 }}
           YAHOO_APP_PASSWORD_1: ${{ secrets.YAHOO_APP_PASSWORD_1 }}

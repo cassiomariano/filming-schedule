@@ -2,13 +2,14 @@
 // Checks the email reader against copies of real availability emails.
 const fs = require("fs");
 const path = require("path");
-const { parseEmail, isAvailabilityCheck } = require("../parser.js");
+const { parseEmail, isAvailabilityCheck, isFromCastingAgency } = require("../parser.js");
 
 const cases = JSON.parse(fs.readFileSync(path.join(__dirname, "emails.json"), "utf8"));
 let failed = 0;
 
 for (const c of cases) {
-  const isCall = isAvailabilityCheck(c.email.subject, c.email.text);
+  // the robot needs both: sent by a casting agency, and reads like an availability check
+  const isCall = isFromCastingAgency(c.email.fromName, c.email.fromEmail, ["Casting Collective"]) && isAvailabilityCheck(c.email.subject, c.email.text);
   if (isCall !== c.expect.isCall) {
     console.log(`✗ ${c.name}: isCall should be ${c.expect.isCall}`);
     failed++;
