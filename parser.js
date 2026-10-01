@@ -128,16 +128,48 @@
     return CALL_PHRASES.test(subj) || CALL_PHRASES.test((text || "").slice(0, 3000));
   }
 
+  // In a "thank you for replying" email: did you say available or not?
+  function replyAnswer(subject, text) {
+    var t = (subject || "") + " " + (text || "").slice(0, 1500);
+    return /\bunavailable\b|not available|can'?t attend|cannot attend|declined/i.test(t) ? "declined" : "available";
+  }
+
+  // ---------- the agency's reply links (Respond / Yes / No) ----------
+  // Returns up to 4 links: {kind: "yes" | "no" | "respond", text, url}.
+  // These are only SHOWN in the app for you to tap. The robot never opens them,
+  // because opening a "Yes, I can attend" link could answer for you.
+  function extractLinks(html) {
+    var out = [], seen = {}, m;
+    var re = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    var skip = /unsubscribe|privacy|policy|facebook|twitter|instagram|x\.com\/|linkedin|tiktok|newsletter|sign.?up|art_edit|profile|rates|faq|mailto:|tel:|google\.com\/calendar|maps\./i;
+    while ((m = re.exec(html || ""))) {
+      var url = m[1].replace(/&amp;/g, "&").trim();
+      var text = m[2].replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+      if (!/^https?:\/\//i.test(url) || skip.test(url) || skip.test(text) || seen[url]) continue;
+      var kind = null;
+      if (/\bno\b|can'?t|cannot|unavailable|not available|decline/i.test(text)) kind = "no";
+      else if (/\byes\b|i can attend|i'?m available|i am available|accept/i.test(text)) kind = "yes";
+      else if (/respond|reply|availab|open message|view|answer|click here/i.test(text) || /availab|respond|epcastingportal|enquir/i.test(url)) kind = "respond";
+      if (!kind) continue;
+      seen[url] = true;
+      out.push({ kind: kind, text: text.slice(0, 40) || "Respond", url: url });
+    }
+    return out.slice(0, 4);
+  }
+
   // What kind of agency email is this?
   //   "call"     a new availability check  -> becomes a New call
   //   "booked"   a booking confirmation    -> marks the matching call Confirmed
   //   "released" a release / cancellation  -> marks the matching call Released
+  //   "replied"  the agency confirming your answer -> marks the call Available or Declined
   //   null       anything else             -> ignored
   function classifyEmail(subject, text) {
     var subj = subject || "";
     // releases and bookings first: they often start with "Thank you for being available..."
     if (/\breleased?\b|cancel+ed|cancellation|no longer (needed|required)|stood down/i.test(subj)) return "released";
     if (/booking confirm|confirmed booking|you('| a)re booked|you have been booked|booked (for|on)|booking:\s|is confirmed/i.test(subj)) return "booked";
+    // the agency confirming YOUR reply ("Thank you for letting us know that you are available")
+    if (/thank you for (letting us know|responding|your (response|reply)|being (un)?available|confirming)/i.test(subj)) return "replied";
     if (/thank|review|invit|newsletter|survey|payment|invoice/i.test(subj)) return null;
     return isAvailabilityCheck(subj, text) ? "call" : null;
   }
@@ -341,7 +373,7 @@
     return call;
   }
 
-  var api = { parseEmail: parseEmail, htmlToText: htmlToText, isAvailabilityCheck: isAvailabilityCheck, classifyEmail: classifyEmail, isFromCastingAgency: isFromCastingAgency, AGENCIES: AGENCIES };
+  var api = { parseEmail: parseEmail, htmlToText: htmlToText, isAvailabilityCheck: isAvailabilityCheck, classifyEmail: classifyEmail, replyAnswer: replyAnswer, extractLinks: extractLinks, isFromCastingAgency: isFromCastingAgency, AGENCIES: AGENCIES };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.EmailParser = api;
 })(this);

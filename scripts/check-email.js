@@ -16,7 +16,7 @@ const crypto = require("crypto");
 const { ImapFlow } = require("imapflow");
 const { simpleParser } = require("mailparser");
 const admin = require("firebase-admin");
-const { parseEmail, isAvailabilityCheck, classifyEmail, isFromCastingAgency, htmlToText } = require("../parser.js");
+const { parseEmail, isAvailabilityCheck, classifyEmail, replyAnswer, extractLinks, isFromCastingAgency, htmlToText } = require("../parser.js");
 
 // ---------- settings (stored as GitHub secrets, never in the code) ----------
 const DAYS_BACK = Number(process.env.DAYS_BACK || 3);
@@ -164,6 +164,42 @@ async function applyStatusEmail(kind, r, subject, received, skipId) {
   return c.id;
 }
 
+// every web address in an email (to recognise the same enquiry in a later email)
+function allUrls(html) {
+  const out = [];
+  const re = /href\s*=\s*["'](https?:\/\/[^"']+)["']/gi;
+  let m;
+  while ((m = re.exec(html))) out.push({ url: m[1].replace(/&amp;/g, "&") });
+  return out;
+}
+// long codes inside a link (e.g. ...epcastingportal.com/r/9821E119-6C4A...) that identify one enquiry
+function linkCodes(links) {
+  const codes = new Set();
+  (links || []).forEach(l => String(l.url || "").split(/[\/?&=#.]+/).forEach(part => {
+    if (part.length >= 10 && /\d/.test(part) && /[a-z]/i.test(part)) codes.add(part.toLowerCase());
+  }));
+  return codes;
+}
+// "Thank you for letting us know that you are available": find the call you answered.
+// 1) same code in the links, 2) same production + agency, 3) the only unanswered call from that agency.
+async function applyReply(r, links, answer) {
+  await loadExistingCalls();
+  const open = existingCalls.filter(c => c.id && ["pending", "available"].includes(c.status));
+  const codes = linkCodes(links);
+  let match = codes.size ? open.filter(c => [...linkCodes(c.links)].some(x => codes.has(x))) : [];
+  if (match.length !== 1 && r.project) match = open.filter(c => c.project && sameProject(c.project, r.project) && (!r.agency || sameName(c.agency, r.agency)));
+  if (match.length !== 1 && r.agency) {
+    const recent = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    match = open.filter(c => c.status === "pending" && sameName(c.agency, r.agency) && (c.received || "") >= recent);
+  }
+  if (match.length !== 1) return null;
+  const c = match[0];
+  if (c.status === answer) return c.id;
+  await db.collection("calls").doc(c.id).update({ status: answer, repliedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  c.status = answer;
+  return c.id;
+}
+
 async function checkAccount(account) {
   const counts = { looked: 0, alreadySeen: 0, notACall: 0, added: 0, updated: 0 };
   const client = new ImapFlow({
@@ -217,6 +253,14 @@ async function checkAccount(account) {
 
       const r = parseEmail({ subject, fromName: from.name, fromEmail: from.address, text, received });
 
+      // The agency confirming your answer: mark the call Available or Declined
+      if (kind === "replied") {
+        const callId = await applyReply(r, extractLinks(mail.html || "").concat(allUrls(mail.html || "")), replyAnswer(subject, text));
+        if (callId) counts.updated++;
+        await seenRef.set({ at: new Date().toISOString(), call: callId });
+        continue;
+      }
+
       // A booking confirmation or a release: update the matching call, never add a new one
       if (kind === "booked" || kind === "released") {
         const callId = await applyStatusEmail(kind, r, subject, received, null);
@@ -236,6 +280,7 @@ async function checkAccount(account) {
         emailSubject: subject.slice(0, 300),
         emailFrom: ((from.name || "") + " <" + (from.address || "") + ">").slice(0, 200),
         rawEmail: (subject + "\n\n" + text).slice(0, 8000),
+        links: extractLinks(mail.html || ""),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };

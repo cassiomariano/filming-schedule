@@ -158,6 +158,8 @@ h3.wk{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transfo
 .upday.off{text-decoration:line-through;font-weight:400}
 .upday.upclash{border-color:var(--clash);box-shadow:inset 0 0 0 1px var(--clash)}
 .upacts{display:flex;gap:6px;flex-wrap:wrap}
+a.btn{text-decoration:none}
+.btn.yes{background:var(--st-confirmed);color:var(--st-confirmed-fg);border-color:var(--st-confirmed)}
 .ev .k{font-family:var(--f-mono);font-size:9px;font-weight:600;opacity:.75;flex:none;letter-spacing:.03em}
 .ev .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .ev .m{flex:none;font-size:11px}
@@ -204,7 +206,7 @@ h3.wk{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transfo
 .dchip{cursor:pointer;font:inherit;font-family:var(--f-mono);font-size:12px;font-weight:600;border:1px solid transparent;border-radius:5px;padding:2px 7px;white-space:nowrap}
 .dchip:hover{outline:2px solid var(--accent);outline-offset:1px}
 .dchip.off{text-decoration:line-through}
-.row .acts{display:flex;flex-direction:column;gap:6px;padding:10px 12px 10px 0;justify-content:center}
+.row .acts{display:flex;flex-direction:column;gap:6px;padding:10px 12px 10px 0;justify-content:center;align-items:stretch;max-width:220px}
 .due{font-family:var(--f-mono);font-size:11px;font-weight:600}
 .due.late{color:var(--attn)}
 .empty{background:var(--surface);border:1px dashed var(--line);border-radius:10px;padding:28px 20px;text-align:center;color:var(--muted);display:flex;flex-direction:column;gap:10px;align-items:center}
@@ -525,6 +527,25 @@ function renderCalendar(){
   }
   main.innerHTML = h;
 }
+/* Reply buttons: the agency's own links (opened in a new tab) + one tap to record your answer.
+   Yes/No links (e.g. True Edge) record your answer as you tap them. */
+function replyHTML(c){
+  const links = c.links || [];
+  const yes = links.find(l => l.kind === "yes"), no = links.find(l => l.kind === "no"), respond = links.find(l => l.kind === "respond");
+  let h = "";
+  if (c.status === "pending"){
+    if (yes) h += `<a class="btn small yes" href="${esc(yes.url)}" target="_blank" rel="noopener" data-quick="available" data-id="${c.id}">✓ Yes, available ↗</a>`;
+    if (no)  h += `<a class="btn small" href="${esc(no.url)}" target="_blank" rel="noopener" data-quick="declined" data-id="${c.id}">✕ Not available ↗</a>`;
+    if (respond && !(yes && no)) h += `<a class="btn small primary" href="${esc(respond.url)}" target="_blank" rel="noopener">Reply to agency ↗</a>`;
+    // agency Yes/No links already record your answer; otherwise one tap to note what you said
+    if (!(yes && no)) h += `<button class="btn small" data-set="available" data-id="${c.id}">✓ ${respond?"I said yes":"Accept"}</button><button class="btn small" data-set="declined" data-id="${c.id}">✕ ${respond?"I said no":"Decline"}</button>`;
+  } else if (c.status === "available"){
+    h += `<button class="btn small" data-set="confirmed" data-id="${c.id}">I'm booked</button><button class="btn small" data-set="released" data-id="${c.id}">Released</button>`;
+  }
+  if (c.emailSubject) h += `<a class="btn small ghost" href="https://mail.yahoo.com/d/search/keyword=${encodeURIComponent(c.emailSubject)}" target="_blank" rel="noopener" title="Search Yahoo Mail for this email">✉ Email ↗</a>`;
+  return h;
+}
+
 /* Upcoming: one card per job — name, your status, fitting days, shoot days */
 function upcomingHTML(cl){
   const active = ["pending","available","confirmed"];
@@ -562,9 +583,7 @@ function upCard(c, cl){
     }).join("")}</span></div>`;
   };
   const du = c.status === "pending" ? dueText(c.respondBy) : null;
-  const acts = c.status==="pending"
-    ? `<button class="btn small" data-set="available" data-id="${c.id}">✓ Accept</button><button class="btn small" data-set="declined" data-id="${c.id}">✕ Decline</button>`
-    : c.status==="available" ? `<button class="btn small" data-set="confirmed" data-id="${c.id}">I'm booked</button><button class="btn small" data-set="released" data-id="${c.id}">Released</button>` : "";
+  const acts = replyHTML(c);
   return `<article class="up ${clsS(c.status)}-edge">
     <div class="uphead" data-open="${c.id}" role="button" tabindex="0">
       <span class="upst ${clsS(c.status)}">${esc(MEANS[c.status]||c.status)}</span>
@@ -618,10 +637,7 @@ function renderCalls(){
         ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"; return `<button type="button" class="dchip ${clsS(st)} ${e.kind}${off?" off":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${e.kind==="fit"?"Fitting":"Shoot"} · ${SMAP[st].short} · ${DAY_TIP}">${e.kind==="fit"?"F ":""}${fmtDM(e.d)}${e.night?" ☾":""}${st==="done"?" ✓":""}</button>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
         ${du?`<span class="due${du.late?" late":""}">${esc(du.txt)}</span>`:""}
       </div>
-      <div class="acts">${c.status==="pending"
-        ? `<button class="btn small" data-set="available" data-id="${c.id}" ${S.canWrite?"":"disabled"}>✓ Accept</button><button class="btn small" data-set="declined" data-id="${c.id}" ${S.canWrite?"":"disabled"}>✕ Decline</button>`
-        : c.status==="available" ? `<button class="btn small" data-set="confirmed" data-id="${c.id}" ${S.canWrite?"":"disabled"}>Booked</button><button class="btn small" data-set="released" data-id="${c.id}" ${S.canWrite?"":"disabled"}>Released</button>`
-        : c.status==="confirmed" && lastDate(c) && lastDate(c) < TODAY ? `<button class="btn small" data-set="done" data-id="${c.id}" ${S.canWrite?"":"disabled"}>Mark done</button>` : ""}</div>
+      <div class="acts">${replyHTML(c)}${c.status==="confirmed" && lastDate(c) && lastDate(c) < TODAY ? `<button class="btn small" data-set="done" data-id="${c.id}">Mark done</button>` : ""}</div>
     </article>`;
   }
   main.innerHTML = h + `</div>`;
@@ -779,6 +795,7 @@ function drawEditor(){
           <div class="fld"><label for="f-notes">Notes</label><textarea class="inp" id="f-notes">${esc(d.notes)}</textarea></div>
         </div>
       </details>
+      ${draftId && (d.links||[]).length ? `<div class="fld"><span class="lbl">Agency reply links</span><div style="display:flex;gap:6px;flex-wrap:wrap">${d.links.map(l => `<a class="btn small" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.kind==="yes"?"✓ "+l.text:l.kind==="no"?"✕ "+l.text:"Reply to agency")} ↗</a>`).join("")}</div></div>` : ""}
       ${d.rawEmail ? `<details class="more"><summary>Original email</summary><pre class="raw">${esc(d.rawEmail)}</pre></details>` : ""}
       ${draftId ? `<div class="src">Source: ${esc(d.source||"")}${d.updatedAt?` · updated ${esc(d.updatedAt.slice(0,16).replace("T"," "))}`:""}</div>` : ""}
       ${confirmDel ? `<div class="confirm"><span>Delete this call for good?</span><button class="btn small danger" data-delyes>Delete</button><button class="btn small" data-delno>Keep</button></div>` : ""}
@@ -957,6 +974,10 @@ document.addEventListener("change", e => {
   if (e.target.id === "statusSel"){ S.listStatus = e.target.value; save("listStatus", S.listStatus); renderCalls(); }
   if (e.target.id === "agencySel"){ S.agency = e.target.value; renderCalls(); }
   if (e.target.id === "sortSel"){ S.sort = e.target.value; save("sort", S.sort); renderCalls(); }
+});
+document.addEventListener("click", e => {
+  const a = e.target.closest("a[data-quick]");
+  if (a) setStatus(a.dataset.id, a.dataset.quick);
 });
 $("#addBtn").addEventListener("click", openImporter);
 $("#exportBtn").addEventListener("click", openMenu);
