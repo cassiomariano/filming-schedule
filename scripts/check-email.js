@@ -657,11 +657,14 @@ async function handleMail(m, account, counts, rereading) {
       if (page) {
         epu.opened++;
         const ptext = htmlToText(page);
+        [["been released", /(have|has) been released|you('| a)re released/i], ["released from", /released from/i], ["not required", /not (required|needed)/i],
+         ["been booked", /(have|has) been booked|you('| a)re booked|booking (is )?confirmed/i], ["word booked", /\bbooked\b/i], ["word released", /\breleased?\b/i],
+         ["status label", /status\s*:/i], ["pencil", /pencil/i], ["cancel", /cancel/i]].forEach(([k, re]) => { if (re.test(ptext)) miss("EP page says " + k); });
         const r2 = parseEmail({ subject: "", fromName: from.name, fromEmail: from.address, html: page, text: "", received });
         if (!r2.agency) r2.agency = r.agency;
         knownName(r2, "", ptext);
-        const k2 = /\breleased?\b|not (required|selected|needed)|stood down|cancel+ed/i.test(ptext) ? "released"
-                 : /\bbooked\b|booking confirm|confirmed/i.test(ptext) ? "booked" : null;
+        const k2 = /(have|has) been released|you('| a)re released|released from|not (required|selected|needed)|stood down|(has|have) been cancel+ed/i.test(ptext) ? "released"
+                 : /(have|has) been booked|you('| a)re booked|booking (is )?confirmed|confirmed booking/i.test(ptext) ? "booked" : null;
         if (k2) {
           epu[k2]++;
           callId = await applyStatusEmail(k2, r2, subject, received, null, links, m.trash ? null : { ...m, key, html: page, text: ptext });
