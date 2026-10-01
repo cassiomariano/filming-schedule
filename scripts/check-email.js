@@ -214,8 +214,9 @@ function shape(k) { shapes[k] = (shapes[k] || 0) + 1; }
 function tickedAnswers(text, parse) {
   const L = text.split("\n").map(x => x.trim()).filter(Boolean);
   const out = [];
-  let lastDate = null, lastDateLine = -99;
+  let lastDate = null, lastDateLine = -99, availQ = false;
   L.forEach((line, i) => {
+    if (/\?\s*$/.test(line) || /^(question|q\d)/i.test(line)) availQ = /availab|attend|dates?\b|work (on|the)|book/i.test(line);
     const ds = parse(line);
     if (ds.length) { lastDate = ds; lastDateLine = i; }
     const parts = line.split("☒");
@@ -229,7 +230,8 @@ function tickedAnswers(text, parse) {
       shape(a ? `${a}-${where}` : (after ? "other-word" : "empty"));
       const near = ds.length ? ds : (i - lastDateLine <= 4 ? lastDate : null);
       shape(ds.length ? "date-same-line" : near ? "date-near" : "no-date");
-      if (a) out.push({ answer: a, dates: (near || []).map(d => d.d) });
+      if (a && (near || availQ)) { out.push({ answer: a, dates: (near || []).map(d => d.d) }); shape(near ? "used-date" : "used-question"); }
+      else if (a) shape("ignored-other-question");
     }
   });
   return out;
