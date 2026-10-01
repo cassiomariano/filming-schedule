@@ -23,6 +23,10 @@ on:
       find:
         description: "Find an email: words from its subject (reports only yes/no facts)"
         default: ""
+      portal_debug:
+        description: "Check EP message pages now and report their format (counts only)"
+        type: boolean
+        default: false
 
 concurrency:
   group: check-email             # never run two checks at the same time
@@ -45,6 +49,7 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           TEST_ALERT: ${{ github.event.inputs.test_alert || 'false' }}
           FIND: ${{ github.event.inputs.find || '' }}
+          PORTAL_DEBUG: ${{ github.event.inputs.portal_debug == 'true' && 'yes' || '' }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           YAHOO_EMAIL_1: ${{ secrets.YAHOO_EMAIL_1 }}
           YAHOO_APP_PASSWORD_1: ${{ secrets.YAHOO_APP_PASSWORD_1 }}

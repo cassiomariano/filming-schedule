@@ -206,7 +206,7 @@ async function applyCallTime(r, ct, subject) {
 // The "Respond" link in an EP email opens a message page (no login needed) with the production
 // name, every date, the deadline and, once you've replied, your answers. The robot only READS
 // these pages (a normal page visit). It never opens Yes/No links, which could answer for you.
-const portal = { read: 0, failed: 0, login: 0, answered: 0 };
+const portal = { read: 0, failed: 0, login: 0, answered: 0, recorded: 0, radios: 0, ticked: 0, scripts: 0, dated: 0 };
 function portalLink(c) {
   const l = (c.links || []).find(x => x.kind === "respond" && /^https:\/\/[a-z0-9.-]*epcastingportal\.com\//i.test(x.url));
   return l ? l.url : null;
@@ -232,6 +232,12 @@ async function enrichFromPortal(call) {
   if (!html) return false;
   const text = htmlToText(html);
   const r = parseEmail({ subject: call.emailSubject || "", fromName: call.agency, html, text: "", received: call.received });
+  // counts only (no content) so the page format can be checked from the public log
+  if (/recorded your response/i.test(text)) portal.recorded++;
+  if (/type=["']?radio/i.test(html)) portal.radios++;
+  if (/☒/.test(text)) portal.ticked++;
+  if (/<script/i.test(html) && html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<[^>]+>/g, "").trim().length < 400) portal.scripts++;
+  if (r.dates.length) portal.dated++;
   if (r.project && (!call.project || call.review)) call.project = r.project;
   if (!call.role && r.role) call.role = r.role;
   if (!call.rate && r.rate) call.rate = r.rate;
@@ -271,8 +277,9 @@ async function enrichFromPortal(call) {
 // every 20 minutes, look again at EP pages of calls you haven't answered yet (max 6 per run)
 async function refreshPendingPortalPages() {
   await loadExistingCalls();
-  const due = existingCalls.filter(c => c.id && ["pending"].includes(c.status) && portalLink(c) &&
-    (!c.portalCheckedAt || Date.now() - new Date(c.portalCheckedAt).getTime() > 20 * 60 * 1000)).slice(0, 6);
+  const dbg = !!process.env.PORTAL_DEBUG;
+  const due = existingCalls.filter(c => c.id && (dbg ? ["pending", "available"] : ["pending"]).includes(c.status) && portalLink(c) &&
+    (dbg || !c.portalCheckedAt || Date.now() - new Date(c.portalCheckedAt).getTime() > 20 * 60 * 1000)).slice(0, dbg ? 30 : 6);
   for (const c of due) {
     const before = JSON.stringify([c.status, c.project, c.dates, c.answers]);
     const copy = { ...c };
@@ -607,6 +614,7 @@ async function checkFolder(client, account, counts) {
   }
   try { await refreshPendingPortalPages(); } catch (e) { report("warning", "EP pages", "Could not refresh EP pages (" + (e.code || e.name) + ")."); }
   if (portal.read + portal.failed + portal.login) {
+    if (process.env.PORTAL_DEBUG) report("notice", "EP page check", `pages: ${portal.read}; with "recorded your response": ${portal.recorded}; with answer buttons: ${portal.radios}; with ticked answers: ${portal.ticked}; mostly script (built in the browser): ${portal.scripts}; with dates found: ${portal.dated}`);
     report("notice", "EP pages", `Read ${portal.read} EP message pages, ${portal.answered} answers picked up` +
       (portal.failed ? `, ${portal.failed} could not be opened` : "") + (portal.login ? `, ${portal.login} asked for a login` : "") + ".");
   }
