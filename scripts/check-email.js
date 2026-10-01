@@ -406,7 +406,27 @@ async function checkFolder(client, account, counts) {
     for (const cand of candidates) {
       const key = emailKey(cand.id);
       const seenRef = db.collection("processed").doc(key);
-      if ((await seenRef.get()).exists) { counts.alreadySeen++; continue; }
+      const seenDoc = await seenRef.get();
+      if (seenDoc.exists) {
+        counts.alreadySeen++;
+        // older calls were saved without the agency's reply link: add it now, then read the EP page
+        const oldId = seenDoc.data().call;
+        if (oldId) {
+          await loadExistingCalls();
+          const c = existingCalls.find(x => x.id === oldId);
+          if (c && !c.links) {
+            const m2 = await client.fetchOne(cand.uid, { source: true }, { uid: true });
+            const mail2 = m2 && m2.source ? await simpleParser(m2.source) : null;
+            const copy = { ...c, links: extractLinks((mail2 && mail2.html) || "") };
+            if (["pending", "available"].includes(c.status) && !(c.dates || []).some(e => e.state || e.callTime)) await enrichFromPortal(copy);
+            const { id, ...body } = copy;
+            await db.collection("calls").doc(c.id).set({ ...body, updatedAt: new Date().toISOString() });
+            Object.assign(c, copy);
+            counts.updated++;
+          }
+        }
+        continue;
+      }
       // read the whole message without marking it as read
       const msg = await client.fetchOne(cand.uid, { source: true }, { uid: true });
       if (!msg || !msg.source) continue;
