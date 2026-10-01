@@ -27,6 +27,13 @@ const SURVEY = process.env.SURVEY === "true";
 const survey = {};
 const SURVEY_WORDS = ["book", "confirm", "selected", "pencil", "hold", "call sheet", "call time", "callsheet", "schedule", "details", "final", "release", "cancel", "stood down", "not required", "unfortunately", "update", "change", "reminder", "fitting", "wardrobe", "costume", "travel", "tomorrow", "pay", "re:", "availability", "av ", "check", "request"];
 const epu = { found: 0, opened: 0, login: 0, booked: 0, released: 0, unclear: 0, matched: 0 };
+const why = {};
+function miss(k) { why[k] = (why[k] || 0) + 1; }
+// several copies of the same job (reminders): use the one you've acted on, else the newest
+function pickOne(list) {
+  const rank = c => ({ confirmed: 4, available: 3, released: 2, pending: 1 }[c.status] || 0);
+  return list.slice().sort((a, b) => rank(b) - rank(a) || String(b.received || "").localeCompare(String(a.received || "")))[0];
+}
 const stats = { booked: [0, 0, 0], released: [0, 0], replied: [0, 0], calltime: [0, 0], restored: 0, folders: 0 };
 const accounts = [
   { email: process.env.YAHOO_EMAIL_1, password: process.env.YAHOO_APP_PASSWORD_1 },
@@ -165,6 +172,7 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
   let matches = r.project ? open.filter(c => c.project && sameProject(c.project, r.project)) : [];
   if (matches.length > 1 && r.agency) matches = matches.filter(c => sameName(c.agency, r.agency));
   if (matches.length > 1) matches = matches.filter(c => c.status !== "released");
+  if (matches.length > 1 && (!r.agency || matches.every(c => sameName(c.agency, matches[0].agency)))) matches = [pickOne(matches)];
   const codes = linkCodes(links);
   if (matches.length !== 1 && codes.size) {
     const byCode = open.filter(c => [...linkCodes(c.links)].some(x => codes.has(x)));
@@ -175,6 +183,10 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
     if (byDay.length === 1) matches = byDay;
   }
   if (matches.length !== 1) {
+    const anyStatus = r.project ? existingCalls.filter(c => c.project && sameProject(c.project, r.project)) : [];
+    miss(`${kind}: ` + (!r.project ? "no name in email" : matches.length > 1 ? "several jobs match" :
+      anyStatus.length ? "job found but it is " + [...new Set(anyStatus.map(c => c.status))].join("/") : "no job with that name") +
+      (listed.size ? "" : ", no dates"));
     // a booking we can't link to any request: add it as its own booked job
     if (kind === "booked" && source && r.project && (r.dates || []).length) {
       const call = buildCall(r, source);
@@ -253,8 +265,14 @@ async function applyCallTime(r, ct, subject) {
   const booked = existingCalls.filter(c => c.id && ["confirmed", "available"].includes(c.status));
   let match = r.project ? booked.filter(c => c.project && sameProject(c.project, r.project)) : [];
   const day = ct.dates.length ? ct.dates[0].d : null;
+  if (match.length > 1) match = [pickOne(match)];
   if (match.length !== 1 && day) match = booked.filter(c => c.status === "confirmed" && (c.dates || []).some(e => e.d === day));
-  if (match.length !== 1) return null;
+  if (match.length > 1) match = [pickOne(match)];
+  if (match.length !== 1) {
+    const anyStatus = r.project ? existingCalls.filter(c => c.project && sameProject(c.project, r.project)) : [];
+    miss("calltime: " + (!r.project ? "no name" : anyStatus.length ? "job is " + [...new Set(anyStatus.map(c => c.status))].join("/") : "no job with that name") + (day ? "" : ", no date"));
+    return null;
+  }
   const c = match[0];
   const dates = (c.dates || []).map(e => ({ ...e }));
   const d = day || (dates.filter(e => e.d >= new Date().toISOString().slice(0, 10)).sort((a, b) => a.d.localeCompare(b.d))[0] || {}).d;
@@ -631,6 +649,7 @@ async function handleMail(m, account, counts, rereading) {
           callId = await applyStatusEmail(k2, r2, subject, received, null, links, m.trash ? null : { ...m, key, html: page, text: ptext });
           if (callId) { epu.matched++; counts.updated++; }
         } else epu.unclear++;
+        if (k2 && !callId) miss("EP update: page " + (r2.project ? "has a name" : "has no name") + ", " + r2.dates.length + " dates");
       }
     }
     await remember(callId);
@@ -641,6 +660,7 @@ async function handleMail(m, account, counts, rereading) {
   if (kind === "calltime") {
     stats.calltime[0]++;
     const ct = parseCallTime({ subject, text, received });
+    if (!ct.time) miss("calltime: no time found");
     const callId = ct.time ? await applyCallTime(r, ct, subject) : null;
     if (callId) { counts.updated++; stats.calltime[1]++; }
     await remember(callId);
@@ -817,6 +837,7 @@ async function handleMail(m, account, counts, rereading) {
       }
     }
   }
+  if (Object.keys(why).length) report("notice", "Not matched – why", Object.entries(why).sort((a, b) => b[1] - a[1]).map(([k, v]) => k + " " + v).join(" · "));
   if (epu.found) report("notice", "EP booking updates", `${epu.found} emails; page opened ${epu.opened}, needed a login ${epu.login}; said booked ${epu.booked}, released ${epu.released}, unclear ${epu.unclear}; matched to a job ${epu.matched}.`);
   if (REBUILD) report("notice", "Re-read everything", `Booking emails: ${stats.booked[0]} found, ${stats.booked[1]} matched to a job, ${stats.booked[2]} added as new booked jobs. ` +
     `Release emails: ${stats.released[0]} found, ${stats.released[1]} matched. Answer confirmations: ${stats.replied[0]} found, ${stats.replied[1]} matched. ` +
