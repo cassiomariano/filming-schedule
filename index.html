@@ -169,6 +169,27 @@ details.answers ul,.anslist{margin:4px 0 0;padding-left:18px;font-size:13px}
 .nextjob h2{margin:0;font-family:var(--f-display);font-weight:800;font-size:34px;line-height:1;text-transform:uppercase}
 .nextjob .muted{color:inherit;opacity:.7}
 .nj-line{font-size:15px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.bjobs{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,460px),1fr));gap:14px}
+.bjob{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+.bjob .bj-head{background:var(--st-confirmed);color:var(--st-confirmed-fg);padding:14px 16px 12px;cursor:pointer}
+.bjob.over .bj-head{background:var(--st-done);color:var(--st-done-fg)}
+.bj-top{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline}
+.bj-top .lbl{font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.8}
+.bj-next{font-size:14px}
+.bjob h3{margin:4px 0 2px;font-family:var(--f-display);font-weight:800;font-size:26px;line-height:1.05;text-transform:uppercase}
+.bjob.first h3{font-size:34px}
+.bj-meta{font-size:13px;opacity:.85}
+.bjob .soft{opacity:.7}
+.bj-place{padding:10px 16px 0;font-size:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.bj-days{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:6px;padding:12px 16px}
+.bday{font:inherit;border:1px solid transparent;border-radius:8px;padding:6px 9px;cursor:pointer;text-align:left;display:flex;flex-direction:column;gap:1px;min-height:44px}
+.bday b{font-size:13.5px}
+.bday small{font-size:11.5px;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bday:hover{outline:2px solid var(--accent);outline-offset:1px}
+.bday.off b{text-decoration:line-through}
+.bday.past{opacity:.65}
+.bj-foot{margin-top:auto;display:flex;gap:10px;align-items:center;padding:8px 16px 12px;font-size:12.5px;color:var(--muted);border-top:1px solid var(--line)}
+.bj-foot span{flex:1}
 .btable{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .bhead,.brow{display:grid;grid-template-columns:150px 120px minmax(0,1.2fr) minmax(0,1.4fr);gap:12px;padding:10px 14px;align-items:center}
 .bhead{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--surface-2);border-bottom:1px solid var(--line)}
@@ -473,7 +494,7 @@ function render(){
   const needReply = callList().filter(c => c.status === "pending").length;
   const rc = $("#replyCount"); rc.hidden = !needReply; rc.textContent = needReply; rc.className = "count hot";
   if (!S.loaded) return;
-  const bc = $("#bookedCount"); const nb = bookedDays(false).length; bc.hidden = !nb; bc.textContent = nb;
+  const bc = $("#bookedCount"); const nb = bookedJobs(false).length; bc.hidden = !nb; bc.textContent = nb;
   if (S.tab === "calendar") renderCalendar();
   else if (S.tab === "booked") renderBooked();
   else if (S.tab === "calls") renderCalls();
@@ -584,39 +605,60 @@ function daysAway(d){
   return n === 0 ? "Today" : n === 1 ? "Tomorrow" : n > 1 ? `in ${n} days` : `${-n} days ago`;
 }
 
-/* The Booked tab: date · call time · production · location, one line per booked day */
+/* The Booked tab: one green card per booked job. Every day is a chip — tap it to mark
+   done (blue) → canceled (grey) → back to booked. Tap the title for all the details. */
+function bookedJobs(includePast){
+  const jobs = [];
+  for (const c of S.calls.values()){
+    const days = (c.dates||[]).map((e,i) => ({e, i, st: dayStatus(c, e)})).sort((a,b) => a.e.d.localeCompare(b.e.d));
+    const live = days.filter(x => x.st === "confirmed");
+    const ahead = live.filter(x => x.e.d >= TODAY);
+    const booked = c.status === "confirmed" || live.length;
+    if (!booked) continue;
+    if (!ahead.length && !(includePast && days.some(x => x.st === "confirmed" || x.st === "done"))) continue;
+    jobs.push({c, days, ahead, next: ahead[0] ? ahead[0].e.d : "9999"});
+  }
+  return jobs.sort((a,b) => a.next.localeCompare(b.next) || nameOf(a.c).localeCompare(nameOf(b.c)));
+}
+function mainPlace(c, days){
+  const count = {};
+  days.forEach(x => { const p = placeOf(c, x.e); if (p) count[p] = (count[p]||0) + 1; });
+  return Object.entries(count).sort((a,b) => b[1]-a[1])[0]?.[0] || c.location || "";
+}
 function renderBooked(){
-  const rows = bookedDays(S.showPastBooked);
-  const ahead = rows.filter(x => x.e.d >= TODAY);
-  const outside = ahead.filter(x => EmailParser.londonCheck(placeOf(x.c, x.e)) === "outside").length;
-  const next = ahead[0];
-  let h = "";
-  if (next){
-    const pl = placeOf(next.c, next.e);
-    h += `<section class="nextjob" data-open="${next.c.id}" role="button" tabindex="0">
-      <span class="lbl">Your next job · ${daysAway(next.e.d)}</span>
-      <h2>${esc(nameOf(next.c))}</h2>
-      <div class="nj-line"><b>${fmtShort(next.e.d)}</b>${next.e.kind!=="film"?" · "+kindName(next.e.kind):""}${next.e.callTime?` · Call <b>${esc(next.e.callTime)}</b>`:` · <span class="muted">call time not in yet</span>`}${pl?` · ${esc(pl)}`:""} ${outsideBadge(pl)}</div>
-    </section>`;
-  }
-  h += `<div class="bar"><span class="src">${ahead.length} booked day${ahead.length===1?"":"s"} ahead${outside?` · <b style="color:var(--attn)">${outside} outside London</b>`:""}</span><span style="flex:1"></span>
-    <label class="tog"><input type="checkbox" id="showPastBooked" ${S.showPastBooked?"checked":""}> Show past days</label></div>`;
-  if (!rows.length) h += `<div class="empty"><h2>No booked days yet</h2><p>When a job is confirmed (by you, or by a booking email), its days appear here with call times and locations.</p></div>`;
-  else {
-    h += `<div class="btable"><div class="bhead"><span>Date</span><span>Call time</span><span>Production</span><span>Location</span></div>`;
-    for (const {c, e} of rows){
-      const pl = placeOf(c, e);
-      const st = dayStatus(c, e);
-      h += `<div class="brow${e.d < TODAY ? " past" : ""}">
-        <div class="bdate"><button type="button" class="upday ${clsS(st)}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${DAY_TIP}">${fmtShort(e.d)}${st==="done"?" ✓":""}</button><small>${daysAway(e.d)}</small></div>
-        <div class="btime">${e.callTime ? `<b>${esc(e.callTime)}</b>` : `<span class="muted">waiting for call time</span>`}${e.night ? " ☾" : ""}</div>
-        <div class="bprod" data-open="${c.id}" role="button" tabindex="0"><b>${esc(nameOf(c))}</b> <span class="kind">${kindName(e.kind)}</span><small>${esc([c.agency, c.role].filter(Boolean).join(" · "))}</small></div>
-        <div class="bplace">${pl ? esc(pl) : `<span class="muted">location not known</span>`} ${mapLink(pl)} ${outsideBadge(pl)}</div>
-      </div>`;
-    }
-    h += `</div>`;
-  }
-  main.innerHTML = h;
+  const jobs = bookedJobs(S.showPastBooked);
+  const daysAhead = jobs.reduce((n,j) => n + j.ahead.length, 0);
+  const outside = jobs.filter(j => EmailParser.londonCheck(mainPlace(j.c, j.days)) === "outside").length;
+  let h = `<div class="bar"><h2 class="month-title" style="margin:0">Booked</h2><span class="src">${jobs.length} job${jobs.length===1?"":"s"} · ${daysAhead} day${daysAhead===1?"":"s"} ahead${outside?` · <b style="color:var(--attn)">${outside} outside London</b>`:""}</span><span style="flex:1"></span>
+    <label class="tog"><input type="checkbox" id="showPastBooked" ${S.showPastBooked?"checked":""}> Show past days</label></div>
+    <div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day to change it</span></div>`;
+  if (!jobs.length){ main.innerHTML = h + `<div class="empty"><h2>No booked jobs yet</h2><p>When a job is confirmed (by you, or by a booking email), it appears here with its days, call times and location.</p></div>`; return; }
+  h += `<div class="bjobs">`;
+  jobs.forEach((j, n) => {
+    const {c} = j;
+    const place = mainPlace(c, j.days);
+    const shown = j.days.filter(x => S.showPastBooked || x.e.d >= TODAY);
+    const worked = j.days.filter(x => x.st === "done").length;
+    const nx = j.ahead[0];
+    const lead = nx ? (n === 0 ? "Next job · " : "") + daysAway(nx.e.d) : "Finished";
+    const nextLine = nx ? `<b>${fmtShort(nx.e.d)}</b>${nx.e.callTime ? ` · call <b>${esc(nx.e.callTime)}</b>` : ` · <span class="soft">call time not in yet</span>`}` : "";
+    h += `<article class="bjob${n===0&&nx?" first":""}${nx?"":" over"}">
+      <header class="bj-head" data-open="${c.id}" role="button" tabindex="0" title="Open all details">
+        <div class="bj-top"><span class="lbl">${esc(lead)}</span>${nextLine?`<span class="bj-next">${nextLine}</span>`:""}</div>
+        <h3>${esc(nameOf(c))}</h3>
+        <div class="bj-meta">${esc([c.agency, c.role].filter(Boolean).join(" · "))}</div>
+      </header>
+      <div class="bj-place">${place ? `📍 ${esc(place)} ${mapLink(place)}` : `<span class="soft">📍 location not known yet</span>`} ${outsideBadge(place)}</div>
+      <div class="bj-days">${shown.map(x => {
+        const e = x.e, st = x.st, off = st === "released" || st === "canceled";
+        const pl = placeOf(c, e);
+        const sub = [e.kind !== "film" ? kindName(e.kind) : "", e.callTime ? "call " + e.callTime : (st === "confirmed" ? "call tbc" : ""), pl && pl !== place ? pl : "", off ? st : "", st === "done" ? "worked ✓" : ""].filter(Boolean).join(" · ");
+        return `<button type="button" class="bday ${clsS(st)}${off?" off":""}${e.d < TODAY ? " past" : ""}" data-cycle="${c.id}|${x.i}" title="${DAY_TIP}"><b>${fmtShort(e.d)}${e.night?" ☾":""}</b><small>${esc(sub || " ")}</small></button>`;
+      }).join("")}</div>
+      <footer class="bj-foot"><span>${j.ahead.length} day${j.ahead.length===1?"":"s"} ahead${worked?` · ${worked} worked`:""}</span>${c.emailSubject?`<a class="maplink" href="https://mail.yahoo.com/d/search/keyword=${encodeURIComponent(c.emailSubject)}" target="_blank" rel="noopener">✉ Email ↗</a>`:""}<button class="btn small ghost" data-open="${c.id}">Details</button></footer>
+    </article>`;
+  });
+  main.innerHTML = h + `</div>`;
 }
 
 /* Reply buttons: the agency's own links (opened in a new tab) + one tap to record your answer.
@@ -1062,7 +1104,7 @@ document.addEventListener("click", e => {
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && layer.innerHTML) closeSheet();
-  if (e.key === "Enter" && e.target.matches(".row .body, .uphead, .bprod, .nextjob")) openEditor(e.target.dataset.open);
+  if (e.key === "Enter" && e.target.matches(".row .body, .uphead, .bprod, .nextjob, .bj-head")) openEditor(e.target.dataset.open);
 });
 document.addEventListener("change", e => {
   if (e.target.classList.contains("dst")) e.target.className = "inp dst dst-" + (e.target.value || "auto");

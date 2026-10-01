@@ -20,6 +20,10 @@ const { parseEmail, isAvailabilityCheck, classifyEmail, replyAnswer, extractLink
 
 // ---------- settings (stored as GitHub secrets, never in the code) ----------
 const DAYS_BACK = Number(process.env.DAYS_BACK || 3);
+// "Re-read everything": go through every folder, oldest email first, and work out the status
+// of each job again (request → your answer → booking / release → call times). No phone alerts.
+const REBUILD = process.env.REBUILD === "true";
+const stats = { booked: [0, 0, 0], released: [0, 0], replied: [0, 0], calltime: [0, 0], restored: 0, folders: 0 };
 const accounts = [
   { email: process.env.YAHOO_EMAIL_1, password: process.env.YAHOO_APP_PASSWORD_1 },
   { email: process.env.YAHOO_EMAIL_2, password: process.env.YAHOO_APP_PASSWORD_2 },
@@ -113,6 +117,7 @@ async function getKnownAgencies() {
 // ---------- phone notification (free ntfy app) ----------
 // Sends the new call to your phone. The topic name works like a password: keep it private.
 async function notifyPhone(call) {
+  if (REBUILD) return;                                 // re-reading old emails: no alerts
   const topic = process.env.NTFY_TOPIC;
   if (!topic) return;
   const days = (call.dates || []).map(d => {
@@ -145,22 +150,54 @@ async function notifyPhone(call) {
   }
 }
 
-// Booking confirmation / release email: find the ONE matching open call (same production,
-// same agency) and mark it Confirmed or Released. Returns the call's id, or null if no single match.
-async function applyStatusEmail(kind, r, subject, received, skipId) {
+// Booking confirmation / release email: find the ONE matching call and mark it Confirmed or
+// Released. Matching, in order: same production name (+ agency if several) → same reply-link
+// code → same agency with one of the listed days. A booking with no match becomes a new booked
+// job (some jobs are booked without an availability email). Returns the call's id, or null.
+async function applyStatusEmail(kind, r, subject, received, skipId, links, source) {
   await loadExistingCalls();
-  const matches = existingCalls.filter(c => c.id && c.id !== skipId && c.project && r.project && sameProject(c.project, r.project) &&
-                                             (!r.agency || sameName(c.agency, r.agency)) &&
-                                             ["pending", "available", "confirmed"].includes(c.status));
-  if (matches.length !== 1) return null;
+  const open = existingCalls.filter(c => c.id && c.id !== skipId && ["pending", "available", "confirmed", "released"].includes(c.status));
+  const listed = new Set((r.dates || []).map(x => x.d));
+  let matches = r.project ? open.filter(c => c.project && sameProject(c.project, r.project)) : [];
+  if (matches.length > 1 && r.agency) matches = matches.filter(c => sameName(c.agency, r.agency));
+  if (matches.length > 1) matches = matches.filter(c => c.status !== "released");
+  const codes = linkCodes(links);
+  if (matches.length !== 1 && codes.size) {
+    const byCode = open.filter(c => [...linkCodes(c.links)].some(x => codes.has(x)));
+    if (byCode.length === 1) matches = byCode;
+  }
+  if (matches.length !== 1 && r.agency && listed.size) {
+    const byDay = open.filter(c => c.status !== "released" && sameName(c.agency, r.agency) && (c.dates || []).some(e => listed.has(e.d)));
+    if (byDay.length === 1) matches = byDay;
+  }
+  if (matches.length !== 1) {
+    // a booking we can't link to any request: add it as its own booked job
+    if (kind === "booked" && source && r.project && (r.dates || []).length) {
+      const call = buildCall(r, source);
+      call.status = "confirmed";
+      call.review = true;
+      call.reviewReason = "Made from a booking email (no matching availability check found). Check the dates";
+      call.notes = "Booked by email on " + received + ": " + String(subject).slice(0, 120);
+      const id = "b" + source.key;
+      await enrichFromPortal(call);
+      call.status = "confirmed";
+      await db.collection("calls").doc(id).set(call);
+      existingCalls.push({ id, ...call });
+      stats.booked[2]++;
+      await notifyPhone({ ...call, project: "BOOKED: " + call.project });
+      return id;
+    }
+    return null;
+  }
   const c = matches[0];
+  if (kind === "released" && c.status === "released") return c.id;
   const status = kind === "booked" ? "confirmed" : "released";
   const note = (kind === "booked" ? "Booked" : "Released") + " by email on " + received + ": " + String(subject).slice(0, 120);
-  const changes = { status: status, updatedAt: new Date().toISOString(), notes: (c.notes ? c.notes + " • " : "") + note };
+  const changes = { status: status, updatedAt: new Date().toISOString() };
+  if (!String(c.notes || "").includes(note)) changes.notes = (c.notes ? c.notes + " • " : "") + note;
   // A booking email that lists dates: those days are confirmed (green). Shoot days it does NOT
   // list are marked released (grey). Fittings are only touched if the email lists fitting days.
-  if (kind === "booked" && (r.dates || []).length) {
-    const listed = new Set(r.dates.map(x => x.d));
+  if (kind === "booked" && listed.size) {
     const listsFit = r.dates.some(x => x.kind === "fit"), listsFilm = r.dates.some(x => x.kind === "film");
     const dates = (c.dates || []).map(e => ({ ...e }));
     dates.forEach(e => {
@@ -176,6 +213,25 @@ async function applyStatusEmail(kind, r, subject, received, skipId) {
   c.status = status;
   await notifyPhone({ ...c, project: (kind === "booked" ? "BOOKED: " : "Released: ") + c.project });
   return c.id;
+}
+
+// a new call from an email
+function buildCall(r, src) {
+  return {
+    project: r.project, agency: r.agency, role: r.role,
+    location: r.location, fitLocation: r.fitLocation, filmLocation: r.filmLocation,
+    rate: r.rate, notes: r.notes, dates: r.dates,
+    respondBy: r.respondBy, received: src.received,
+    status: "pending", attention: false,
+    review: r.review, reviewReason: r.reviewReason,
+    source: "email (" + src.account.email.split("@")[1] + ")",
+    emailSubject: src.subject.slice(0, 300),
+    emailFrom: ((src.from.name || "") + " <" + (src.from.address || "") + ">").slice(0, 200),
+    rawEmail: (src.subject + "\n\n" + src.text).slice(0, 8000),
+    links: extractLinks(src.html || ""),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 // Call time email: find the booked job (by production name, else by date) and store
@@ -369,7 +425,7 @@ async function findEmails(words) {
   for (let i = 0; i < accounts.length; i++) {
     const client = new ImapFlow({ host: "imap.mail.yahoo.com", port: 993, secure: true, auth: { user: accounts[i].email, pass: accounts[i].password }, logger: false });
     await client.connect();
-    for (const folder of ["INBOX", "Bulk"]) {
+    for (const { path: folder } of await mailFolders(client)) {
       let lock;
       try { lock = await client.getMailboxLock(folder); } catch (e) { continue; }
       try {
@@ -403,8 +459,17 @@ async function findEmails(words) {
   }
 }
 
+// every folder except Sent and Drafts (agency emails can be in Spam, Archive or your own folders)
+async function mailFolders(client) {
+  const list = await client.list();
+  const out = list
+    .filter(f => !(f.flags && f.flags.has("\\Noselect")) && !["\\Sent", "\\Drafts"].includes(f.specialUse) && !/^(sent|drafts?|outbox|templates)$/i.test(f.name))
+    .map(f => ({ path: f.path, trash: f.specialUse === "\\Trash" || /^(trash|deleted)/i.test(f.name) }));
+  return out.sort((a, b) => (b.path === "INBOX") - (a.path === "INBOX"));
+}
+
 async function checkAccount(account) {
-  const counts = { looked: 0, alreadySeen: 0, notACall: 0, added: 0, updated: 0 };
+  const counts = { looked: 0, alreadySeen: 0, notACall: 0, added: 0, updated: 0, folders: 0 };
   const client = new ImapFlow({
     host: "imap.mail.yahoo.com",
     port: 993,
@@ -415,10 +480,17 @@ async function checkAccount(account) {
   });
   await client.connect();
   try {
-    for (const folder of ["INBOX", "Bulk"]) {          // agency emails sometimes land in Spam ("Bulk")
+    const folders = await mailFolders(client);
+    const all = [];                                    // re-read mode: every email, sorted by date afterwards
+    for (const folder of folders) {
       let lock;
-      try { lock = await client.getMailboxLock(folder); } catch (e) { continue; }
-      try { await checkFolder(client, account, counts); } finally { lock.release(); }
+      try { lock = await client.getMailboxLock(folder.path); } catch (e) { continue; }
+      counts.folders++;
+      try { await checkFolder(client, account, counts, folder, REBUILD ? all : null); } finally { lock.release(); }
+    }
+    if (REBUILD) {
+      all.sort((a, b) => a.date - b.date);              // oldest first: request → answer → booking → call time
+      for (const item of all) await handleMail(item, account, counts, true);
     }
   } finally {
     await client.logout();
@@ -426,125 +498,137 @@ async function checkAccount(account) {
   return counts;
 }
 
-async function checkFolder(client, account, counts) {
-  {
-    const since = new Date(Date.now() - DAYS_BACK * 24 * 60 * 60 * 1000);
+async function checkFolder(client, account, counts, folder, collect) {
+  const since = new Date(Date.now() - DAYS_BACK * 24 * 60 * 60 * 1000);
 
-    // 1) read only the envelopes (sender, subject, ID) of recent emails: small and fast
-    const candidates = [];
-    for await (const msg of client.fetch({ since: since }, { envelope: true, uid: true })) {
-      counts.looked++;
-      const env = msg.envelope || {};
-      const from = (env.from && env.from[0]) || {};
-      // only emails sent by a casting / extras agency (never Spotlight, shops, apps...)
-      if (isFromCastingAgency(from.name, from.address, knownAgencies) || CALL_TIME_SUBJECT.test(env.subject || "")) {
-        candidates.push({ uid: msg.uid, id: env.messageId || account.email + ":" + msg.uid });
-      } else {
-        counts.notACall++;
-      }
-    }
-
-    // 2) download in full only the possible casting emails we haven't seen before
-    for (const cand of candidates) {
-      const key = emailKey(cand.id);
-      const seenRef = db.collection("processed").doc(key);
-      const seenDoc = await seenRef.get();
-      if (seenDoc.exists) {
-        counts.alreadySeen++;
-        // older calls were saved without the agency's reply link: add it now, then read the EP page
-        const oldId = seenDoc.data().call;
-        if (oldId) {
-          await loadExistingCalls();
-          const c = existingCalls.find(x => x.id === oldId);
-          if (c && !c.links) {
-            const m2 = await client.fetchOne(cand.uid, { source: true }, { uid: true });
-            const mail2 = m2 && m2.source ? await simpleParser(m2.source) : null;
-            const copy = { ...c, links: extractLinks((mail2 && mail2.html) || "") };
-            if (["pending", "available"].includes(c.status) && !(c.dates || []).some(e => e.state || e.callTime)) await enrichFromPortal(copy);
-            const { id, ...body } = copy;
-            await db.collection("calls").doc(c.id).set({ ...body, updatedAt: new Date().toISOString() });
-            Object.assign(c, copy);
-            counts.updated++;
-          }
-        }
-        continue;
-      }
-      // read the whole message without marking it as read
-      const msg = await client.fetchOne(cand.uid, { source: true }, { uid: true });
-      if (!msg || !msg.source) continue;
-
-      const mail = await simpleParser(msg.source);
-      const subject = mail.subject || "";
-      const text = mail.html ? htmlToText(mail.html) : (mail.text || "");
-      const from = (mail.from && mail.from.value && mail.from.value[0]) || {};
-      const received = londonDate(mail.date);
-
-      const kind = classifyEmail(subject, text);
-      if (!kind) {
-        await seenRef.set({ at: new Date().toISOString(), call: null });
-        counts.notACall++;
-        continue;
-      }
-
-      const r = parseEmail({ subject, fromName: from.name, fromEmail: from.address, text, received });
-
-      // Call time / call sheet: add the time and place to that day of your booked job
-      if (kind === "calltime") {
-        const ct = parseCallTime({ subject, text, received });
-        const callId = ct.time ? await applyCallTime(r, ct, subject) : null;
-        if (callId) counts.updated++;
-        await seenRef.set({ at: new Date().toISOString(), call: callId });
-        continue;
-      }
-
-      // The agency confirming your answer: mark the call Available or Declined
-      if (kind === "replied") {
-        const callId = await applyReply(r, extractLinks(mail.html || "").concat(allUrls(mail.html || "")), replyAnswer(subject, text));
-        if (callId) counts.updated++;
-        await seenRef.set({ at: new Date().toISOString(), call: callId });
-        continue;
-      }
-
-      // A booking confirmation or a release: update the matching call, never add a new one
-      if (kind === "booked" || kind === "released") {
-        const callId = await applyStatusEmail(kind, r, subject, received, null);
-        if (callId) counts.updated++;
-        await seenRef.set({ at: new Date().toISOString(), call: callId });
-        continue;
-      }
-
-      const call = {
-        project: r.project, agency: r.agency, role: r.role,
-        location: r.location, fitLocation: r.fitLocation, filmLocation: r.filmLocation,
-        rate: r.rate, notes: r.notes, dates: r.dates,
-        respondBy: r.respondBy, received: received,
-        status: "pending", attention: false,
-        review: r.review, reviewReason: r.reviewReason,
-        source: "email (" + account.email.split("@")[1] + ")",
-        emailSubject: subject.slice(0, 300),
-        emailFrom: ((from.name || "") + " <" + (from.address || "") + ">").slice(0, 200),
-        rawEmail: (subject + "\n\n" + text).slice(0, 8000),
-        links: extractLinks(mail.html || ""),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      // the same job may arrive again (reminders, updates): flag it so you can merge or delete
-      await loadExistingCalls();
-      const twin = existingCalls.find(c => c.project && sameName(c.project, call.project) && sameName(c.agency, call.agency) &&
-                                           ["pending", "available", "confirmed"].includes(c.status));
-      if (twin) {
-        call.review = true;
-        call.reviewReason = (call.reviewReason ? call.reviewReason + ". " : "") + "You already have a call for this production from this agency";
-      }
-      const callId = "e" + key;
-      await enrichFromPortal(call);                   // EP message page: real name, all dates, your answers
-      await db.collection("calls").doc(callId).set(call);
-      await seenRef.set({ at: new Date().toISOString(), call: callId });
-      existingCalls.push({ id: callId, ...call });
-      counts.added++;
-      await notifyPhone(call);
+  // 1) read only the envelopes (sender, subject, ID) of recent emails: small and fast
+  const candidates = [];
+  for await (const msg of client.fetch({ since: since }, { envelope: true, uid: true })) {
+    counts.looked++;
+    const env = msg.envelope || {};
+    const from = (env.from && env.from[0]) || {};
+    // only emails sent by a casting / extras agency (never Spotlight, shops, apps...)
+    if (isFromCastingAgency(from.name, from.address, knownAgencies) || CALL_TIME_SUBJECT.test(env.subject || "")) {
+      candidates.push({ uid: msg.uid, id: env.messageId || account.email + ":" + msg.uid });
+    } else {
+      counts.notACall++;
     }
   }
+
+  // 2) download in full only the possible casting emails we haven't seen before
+  //    (re-read mode: all of them, to be worked through in date order)
+  for (const cand of candidates) {
+    const key = emailKey(cand.id);
+    const seenRef = db.collection("processed").doc(key);
+    const seenDoc = await seenRef.get();
+    if (seenDoc.exists && !collect) {
+      counts.alreadySeen++;
+      // older calls were saved without the agency's reply link: add it now, then read the EP page
+      const oldId = seenDoc.data().call;
+      if (oldId) {
+        await loadExistingCalls();
+        const c = existingCalls.find(x => x.id === oldId);
+        if (c && !c.links) {
+          const m2 = await client.fetchOne(cand.uid, { source: true }, { uid: true });
+          const mail2 = m2 && m2.source ? await simpleParser(m2.source) : null;
+          const copy = { ...c, links: extractLinks((mail2 && mail2.html) || "") };
+          if (["pending", "available"].includes(c.status) && !(c.dates || []).some(e => e.state || e.callTime)) await enrichFromPortal(copy);
+          const { id, ...body } = copy;
+          await db.collection("calls").doc(c.id).set({ ...body, updatedAt: new Date().toISOString() });
+          Object.assign(c, copy);
+          counts.updated++;
+        }
+      }
+      continue;
+    }
+    // read the whole message without marking it as read
+    const msg = await client.fetchOne(cand.uid, { source: true }, { uid: true });
+    if (!msg || !msg.source) continue;
+    const mail = await simpleParser(msg.source);
+    const item = {
+      key, seenRef, seen: seenDoc.exists ? seenDoc.data() : null, trash: folder.trash,
+      subject: mail.subject || "", html: mail.html || "",
+      text: mail.html ? htmlToText(mail.html) : (mail.text || ""),
+      from: (mail.from && mail.from.value && mail.from.value[0]) || {},
+      date: mail.date ? new Date(mail.date).getTime() : 0,
+      received: londonDate(mail.date), account,
+    };
+    if (collect) collect.push(item);
+    else await handleMail(item, account, counts, false);
+  }
+}
+
+// work out what one email means and update the schedule
+async function handleMail(m, account, counts, rereading) {
+  const { key, seenRef, subject, text, html, from, received } = m;
+  const kind = classifyEmail(subject, text);
+  if (!kind) {
+    if (!m.seen) await seenRef.set({ at: new Date().toISOString(), call: null });
+    counts.notACall++;
+    return;
+  }
+  if (m.seen && rereading) counts.alreadySeen++;
+  const r = parseEmail({ subject, fromName: from.name, fromEmail: from.address, text, received });
+  const remember = id => seenRef.set({ at: new Date().toISOString(), call: id || (m.seen && m.seen.call) || null, kind });
+
+  // Call time / call sheet: add the time and place to that day of your booked job
+  if (kind === "calltime") {
+    stats.calltime[0]++;
+    const ct = parseCallTime({ subject, text, received });
+    const callId = ct.time ? await applyCallTime(r, ct, subject) : null;
+    if (callId) { counts.updated++; stats.calltime[1]++; }
+    await remember(callId);
+    return;
+  }
+
+  // The agency confirming your answer: mark the call Available or Declined
+  if (kind === "replied") {
+    stats.replied[0]++;
+    const callId = await applyReply(r, extractLinks(html).concat(allUrls(html)), replyAnswer(subject, text));
+    if (callId) { counts.updated++; stats.replied[1]++; }
+    await remember(callId);
+    return;
+  }
+
+  // A booking confirmation or a release: update the matching call
+  if (kind === "booked" || kind === "released") {
+    stats[kind][0]++;
+    const links = extractLinks(html).concat(allUrls(html));
+    const callId = await applyStatusEmail(kind, r, subject, received, null, links, m.trash ? null : { ...m, key });
+    if (callId) { counts.updated++; stats[kind][1]++; }
+    await remember(callId);
+    return;
+  }
+
+  // An availability check
+  if (m.seen) {
+    // re-read mode: bring back a request that is missing from the app, if its dates are still ahead
+    await loadExistingCalls();
+    const exists = m.seen.call && existingCalls.some(c => c.id === m.seen.call);
+    if (exists || m.trash || !r.dates.some(d => d.d >= londonDate())) return;
+  } else if (m.trash) {                                // old requests you deleted: don't add them back
+    await remember(null);
+    return;
+  }
+  const call = buildCall(r, { ...m, account });
+  if (m.seen) { call.review = true; call.reviewReason = "Found again while re-reading all your emails"; }
+  // the same job may arrive again (reminders, updates): flag it so you can merge or delete
+  await loadExistingCalls();
+  const twin = existingCalls.find(c => c.project && sameName(c.project, call.project) && sameName(c.agency, call.agency) &&
+                                       ["pending", "available", "confirmed"].includes(c.status));
+  if (twin) {
+    if (m.seen) return;
+    call.review = true;
+    call.reviewReason = (call.reviewReason ? call.reviewReason + ". " : "") + "You already have a call for this production from this agency";
+  }
+  const callId = "e" + key;
+  await enrichFromPortal(call);                   // EP message page: real name, all dates, your answers
+  await db.collection("calls").doc(callId).set(call);
+  await remember(callId);
+  existingCalls.push({ id: callId, ...call });
+  counts.added++;
+  if (m.seen) stats.restored++;
+  await notifyPhone(call);
 }
 
 (async () => {
@@ -638,7 +722,7 @@ async function checkFolder(client, account, counts) {
         await new Promise(r => setTimeout(r, 15000));   // Yahoo sometimes drops the first connection: wait and try once more
         c = await checkAccount(accounts[i]);
       }
-      report("notice", `Account ${i + 1}`, `Looked at ${c.looked} emails: ${c.alreadySeen} already seen, ${c.notACall} not availability checks, ${c.added} new calls added, ${c.updated} calls updated (booked/released).`);
+      report("notice", `Account ${i + 1}`, `Looked at ${c.looked} emails in ${c.folders} folders: ${c.alreadySeen} already seen, ${c.notACall} not availability checks, ${c.added} new calls added, ${c.updated} calls updated (booked/released).`);
     } catch (err) {
       failed = true;
       // only the kind of error (the full message can contain the address)
@@ -647,6 +731,9 @@ async function checkFolder(client, account, counts) {
       report("error", `Account ${i + 1}`, "Could not check this inbox: " + why);
     }
   }
+  if (REBUILD) report("notice", "Re-read everything", `Booking emails: ${stats.booked[0]} found, ${stats.booked[1]} matched to a job, ${stats.booked[2]} added as new booked jobs. ` +
+    `Release emails: ${stats.released[0]} found, ${stats.released[1]} matched. Answer confirmations: ${stats.replied[0]} found, ${stats.replied[1]} matched. ` +
+    `Call times: ${stats.calltime[0]} found, ${stats.calltime[1]} matched. Requests brought back: ${stats.restored}.`);
   try { await refreshPendingPortalPages(); } catch (e) { report("warning", "EP pages", "Could not refresh EP pages (" + (e.code || e.name) + ")."); }
   if (portal.read + portal.failed + portal.login) {
     if (process.env.PORTAL_DEBUG) report("notice", "EP page check", `pages: ${portal.read}; with "recorded your response": ${portal.recorded}; with answer buttons: ${portal.radios}; with ticked answers: ${portal.ticked}; mostly script (built in the browser): ${portal.scripts}; with dates found: ${portal.dated}; answer shapes: ${Object.entries(shapes).map(([k, v]) => k + " " + v).join(", ") || "none"}`);
