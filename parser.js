@@ -128,6 +128,52 @@
     return CALL_PHRASES.test(subj) || CALL_PHRASES.test((text || "").slice(0, 3000));
   }
 
+  // ---------- call times ----------
+  var CALL_TIME_SUBJECT = /call ?time|call ?sheet|callsheet|unit call|your call\b|call details|tomorrow'?s call|call for (mon|tue|wed|thu|fri|sat|sun)/i;
+
+  // Reads "Call time: 06:30" / "CALL 0630" / "call 6.30am" and the meeting place.
+  // Returns {time: "06:30", place: "...", dates: [...]} (time "" when not found).
+  function parseCallTime(email) {
+    var text = email.text && email.text.trim() ? email.text : htmlToText(email.html || "");
+    var lines = text.split("\n").map(function (l) { return l.trim(); });
+    var time = "";
+    var all = (email.subject || "") + "\n" + text;
+    var m = all.match(/\bcall(?:\s*time)?\s*(?:is|at|:|-|–|@)?\s*(\d{1,2})[:.]?(\d{2})?\s*(am|pm|hrs|hours)?\b/i);
+    if (m) {
+      var h = +m[1], min = m[2] ? +m[2] : 0, ap = (m[3] || "").toLowerCase();
+      if (!m[2] && !ap && m[1].length <= 2 && h > 12) h = NaN;          // "call 23" alone is not a time
+      if (m[1].length === 4 && !m[2]) { h = +m[1].slice(0, 2); min = +m[1].slice(2); }
+      if (ap === "pm" && h < 12) h += 12;
+      if (ap === "am" && h === 12) h = 0;
+      if (h >= 0 && h < 24 && min < 60) time = pad(h) + ":" + pad(min);
+    }
+    var place = field(lines, ["Unit Base", "Unit base location", "Location", "Address", "Report to", "Reporting to", "Venue", "Studio", "Meeting point", "Where"]);
+    if (!place && m) {                                   // "CALL 0545 at Unit Base, Brixton SW2 1AA"
+      var after = all.slice(all.indexOf(m[0]) + m[0].length).match(/^\s*(?:at|@)\s+([^\n.]{4,90})/i);
+      if (after) place = clean(after[1]);
+    }
+    var received = email.received || new Date().toISOString().slice(0, 10);
+    var dates = findDates(lines, email.subject || "", received);
+    if (!dates.length && /tomorrow/i.test(all)) {        // "your call for tomorrow"
+      var t = new Date(received + "T12:00:00"); t.setDate(t.getDate() + 1);
+      dates = [{ d: toKey(t.getFullYear(), t.getMonth() + 1, t.getDate()), kind: "film" }];
+    }
+    return { time: time, place: place, dates: dates };
+  }
+
+  // ---------- is this place in London? ----------
+  // Studios and towns around London count as OUTSIDE London (they need travel planning).
+  var OUTSIDE = /shepperton|pinewood|leavesden|watford|elstree|borehamwood|longcross|chertsey|bovingdon|hemel|\biver\b|sunbury|windsor|ascot|slough|reading|bray|dorset|surrey|bucks|buckinghamshire|herts|hertfordshire|kent|essex|sussex|lewes|cardiff|newport|wales|manchester|liverpool|leeds|hull|birmingham|bristol|scotland|edinburgh|glasgow|yorkshire|portsmouth|brighton|oxford|cambridge|esher|sandown|camberley|aldershot|amersham|beaconsfield|chatham|uckfield|madrid|spain|portugal|radlett|\bAL\d|\bWD\d|\bSL\d|\bHP\d|\bGU\d|\bRG\d/i;
+  var LONDON = /london|\b(E|EC|N|NW|SE|SW|W|WC)\d{1,2}[A-Z]?\b|acton|barbican|brixton|camden|hammersmith|wembley|ealing|greenwich|bethnal|canary wharf|clapham|deptford|depford|hendon|park royal|stratford|olympic park|olimpic|croydon|twickenham|richmond|barnet|islington|hackney|shoreditch|soho|westminster|kensington|chelsea|fulham|wimbledon|lewisham|woolwich|plumstead|hampstead|camberwell|peckham|bermondsey|southwark|lambeth|battersea|wandsworth|tottenham|walthamstow|ilford|romford|uxbridge|hayes|harrow|enfield|brentford|chiswick|st james|mayfair|kings cross|paddington|piccadilly|three mills|twickenham/i;
+  // "london" | "outside" | "" (unknown)
+  function londonCheck(place) {
+    var p = String(place || "").trim();
+    if (!p || /^tbc$/i.test(p)) return "";
+    if (OUTSIDE.test(p)) return "outside";
+    if (LONDON.test(p)) return "london";
+    return "outside";
+  }
+
   // In a "thank you for replying" email: did you say available or not?
   function replyAnswer(subject, text) {
     var t = (subject || "") + " " + (text || "").slice(0, 1500);
@@ -162,11 +208,13 @@
   //   "booked"   a booking confirmation    -> marks the matching call Confirmed
   //   "released" a release / cancellation  -> marks the matching call Released
   //   "replied"  the agency confirming your answer -> marks the call Available or Declined
+  //   "calltime" call time / call sheet details -> adds the call time and place to that day
   //   null       anything else             -> ignored
   function classifyEmail(subject, text) {
     var subj = subject || "";
     // releases and bookings first: they often start with "Thank you for being available..."
     if (/\breleased?\b|cancel+ed|cancellation|no longer (needed|required)|stood down/i.test(subj)) return "released";
+    if (CALL_TIME_SUBJECT.test(subj)) return "calltime";
     if (/booking confirm|confirmed booking|you('| a)re booked|you have been booked|booked (for|on)|booking:\s|is confirmed/i.test(subj)) return "booked";
     // the agency confirming YOUR reply ("Thank you for letting us know that you are available")
     if (/thank you for (letting us know|responding|your (response|reply)|being (un)?available|confirming)/i.test(subj)) return "replied";
@@ -373,7 +421,7 @@
     return call;
   }
 
-  var api = { parseEmail: parseEmail, htmlToText: htmlToText, isAvailabilityCheck: isAvailabilityCheck, classifyEmail: classifyEmail, replyAnswer: replyAnswer, extractLinks: extractLinks, isFromCastingAgency: isFromCastingAgency, AGENCIES: AGENCIES };
+  var api = { parseEmail: parseEmail, htmlToText: htmlToText, isAvailabilityCheck: isAvailabilityCheck, classifyEmail: classifyEmail, parseCallTime: parseCallTime, londonCheck: londonCheck, CALL_TIME_SUBJECT: CALL_TIME_SUBJECT, replyAnswer: replyAnswer, extractLinks: extractLinks, isFromCastingAgency: isFromCastingAgency, AGENCIES: AGENCIES };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.EmailParser = api;
 })(this);

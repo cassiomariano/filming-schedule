@@ -16,7 +16,7 @@ const crypto = require("crypto");
 const { ImapFlow } = require("imapflow");
 const { simpleParser } = require("mailparser");
 const admin = require("firebase-admin");
-const { parseEmail, isAvailabilityCheck, classifyEmail, replyAnswer, extractLinks, isFromCastingAgency, htmlToText } = require("../parser.js");
+const { parseEmail, isAvailabilityCheck, classifyEmail, replyAnswer, extractLinks, parseCallTime, londonCheck, CALL_TIME_SUBJECT, isFromCastingAgency, htmlToText } = require("../parser.js");
 
 // ---------- settings (stored as GitHub secrets, never in the code) ----------
 const DAYS_BACK = Number(process.env.DAYS_BACK || 3);
@@ -125,6 +125,7 @@ async function notifyPhone(call) {
     days ? "Dates: " + days : "Dates: see the email",
     call.location ? "Where: " + call.location : "",
     call.respondBy ? "Reply by: " + call.respondBy.replace("T", " ") : "",
+    londonCheck(call.location || call.filmLocation || call.fitLocation) === "outside" ? "⚠ Outside London" : "",
   ].filter(Boolean);
   try {
     await fetch("https://ntfy.sh/", {
@@ -155,12 +156,49 @@ async function applyStatusEmail(kind, r, subject, received, skipId) {
   const c = matches[0];
   const status = kind === "booked" ? "confirmed" : "released";
   const note = (kind === "booked" ? "Booked" : "Released") + " by email on " + received + ": " + String(subject).slice(0, 120);
-  await db.collection("calls").doc(c.id).update({
-    status: status, updatedAt: new Date().toISOString(),
-    notes: (c.notes ? c.notes + " • " : "") + note,
-  });
+  const changes = { status: status, updatedAt: new Date().toISOString(), notes: (c.notes ? c.notes + " • " : "") + note };
+  // A booking email that lists dates: those days are confirmed (green). Shoot days it does NOT
+  // list are marked released (grey). Fittings are only touched if the email lists fitting days.
+  if (kind === "booked" && (r.dates || []).length) {
+    const listed = new Set(r.dates.map(x => x.d));
+    const listsFit = r.dates.some(x => x.kind === "fit"), listsFilm = r.dates.some(x => x.kind === "film");
+    const dates = (c.dates || []).map(e => ({ ...e }));
+    dates.forEach(e => {
+      if (listed.has(e.d)) { if (e.state === "released" || e.state === "canceled") delete e.state; }
+      else if (!e.state && ((e.kind === "film" && listsFilm) || (e.kind === "fit" && listsFit))) e.state = "released";
+    });
+    r.dates.forEach(x => { if (!dates.some(e => e.d === x.d)) dates.push({ ...x }); });
+    dates.sort((a, b) => a.d.localeCompare(b.d));
+    changes.dates = dates;
+    c.dates = dates;
+  }
+  await db.collection("calls").doc(c.id).update(changes);
   c.status = status;
   await notifyPhone({ ...c, project: (kind === "booked" ? "BOOKED: " : "Released: ") + c.project });
+  return c.id;
+}
+
+// Call time email: find the booked job (by production name, else by date) and store
+// the call time + place on that day. Adds the day if the job didn't have it yet.
+async function applyCallTime(r, ct, subject) {
+  await loadExistingCalls();
+  const booked = existingCalls.filter(c => c.id && ["confirmed", "available"].includes(c.status));
+  let match = r.project ? booked.filter(c => c.project && sameProject(c.project, r.project)) : [];
+  const day = ct.dates.length ? ct.dates[0].d : null;
+  if (match.length !== 1 && day) match = booked.filter(c => c.status === "confirmed" && (c.dates || []).some(e => e.d === day));
+  if (match.length !== 1) return null;
+  const c = match[0];
+  const dates = (c.dates || []).map(e => ({ ...e }));
+  const d = day || (dates.filter(e => e.d >= new Date().toISOString().slice(0, 10)).sort((a, b) => a.d.localeCompare(b.d))[0] || {}).d;
+  if (!d) return null;
+  let entry = dates.find(e => e.d === d && e.kind === "film") || dates.find(e => e.d === d);
+  if (!entry) { entry = { d: d, kind: "film" }; dates.push(entry); dates.sort((a, b) => a.d.localeCompare(b.d)); }
+  entry.callTime = ct.time;
+  if (ct.place) entry.callPlace = ct.place.slice(0, 120);
+  await db.collection("calls").doc(c.id).update({ dates: dates, updatedAt: new Date().toISOString() });
+  c.dates = dates;
+  const t = new Date(d + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+  await notifyPhone({ ...c, project: "Call time: " + c.project, role: t + " — call " + ct.time + (ct.place ? " @ " + ct.place : ""), dates: [] , location: ct.place || c.location });
   return c.id;
 }
 
@@ -222,7 +260,7 @@ async function checkAccount(account) {
       const env = msg.envelope || {};
       const from = (env.from && env.from[0]) || {};
       // only emails sent by a casting / extras agency (never Spotlight, shops, apps...)
-      if (isFromCastingAgency(from.name, from.address, knownAgencies)) {
+      if (isFromCastingAgency(from.name, from.address, knownAgencies) || CALL_TIME_SUBJECT.test(env.subject || "")) {
         candidates.push({ uid: msg.uid, id: env.messageId || account.email + ":" + msg.uid });
       } else {
         counts.notACall++;
@@ -252,6 +290,15 @@ async function checkAccount(account) {
       }
 
       const r = parseEmail({ subject, fromName: from.name, fromEmail: from.address, text, received });
+
+      // Call time / call sheet: add the time and place to that day of your booked job
+      if (kind === "calltime") {
+        const ct = parseCallTime({ subject, text, received });
+        const callId = ct.time ? await applyCallTime(r, ct, subject) : null;
+        if (callId) counts.updated++;
+        await seenRef.set({ at: new Date().toISOString(), call: callId });
+        continue;
+      }
 
       // The agency confirming your answer: mark the call Available or Declined
       if (kind === "replied") {

@@ -158,6 +158,31 @@ h3.wk{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transfo
 .upday.off{text-decoration:line-through;font-weight:400}
 .upday.upclash{border-color:var(--clash);box-shadow:inset 0 0 0 1px var(--clash)}
 .upacts{display:flex;gap:6px;flex-wrap:wrap}
+.outside{display:inline-block;font-family:var(--f-mono);font-size:10.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:#fff;background:var(--attn);border-radius:4px;padding:1px 6px;white-space:nowrap}
+.maplink{font-size:12px;color:var(--accent);white-space:nowrap}
+.muted{color:var(--faint)}
+.nextjob{background:var(--st-confirmed);color:var(--st-confirmed-fg);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:4px;cursor:pointer}
+.nextjob .lbl{font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.8}
+.nextjob h2{margin:0;font-family:var(--f-display);font-weight:800;font-size:34px;line-height:1;text-transform:uppercase}
+.nextjob .muted{color:inherit;opacity:.7}
+.nj-line{font-size:15px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.btable{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.bhead,.brow{display:grid;grid-template-columns:150px 120px minmax(0,1.2fr) minmax(0,1.4fr);gap:12px;padding:10px 14px;align-items:center}
+.bhead{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--surface-2);border-bottom:1px solid var(--line)}
+.brow{border-bottom:1px solid var(--line)}
+.brow:last-child{border-bottom:0}
+.brow.past{opacity:.6}
+.bdate{display:flex;flex-direction:column;gap:2px;align-items:flex-start}
+.bdate small,.bprod small{color:var(--muted);font-size:12px;display:block}
+.btime b{font-family:var(--f-display);font-size:24px;font-weight:800}
+.btime .muted{font-size:12.5px}
+.bprod{cursor:pointer;min-width:0}
+.bplace{font-size:13px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;min-width:0}
+@media (max-width:760px){.bhead{display:none}.brow{grid-template-columns:auto 1fr;gap:6px 12px}.bprod,.bplace{grid-column:1/-1}}
+.dextra{flex:1 1 100%;display:flex;gap:6px;align-items:center}
+.dextra .loc{flex:1 1 auto;min-width:0}
+.ct{display:inline-flex;align-items:center;gap:6px;font-family:var(--f-mono);font-size:11px;text-transform:uppercase;color:var(--muted)}
+.ct .inp{width:110px}
 a.btn{text-decoration:none}
 .btn.yes{background:var(--st-confirmed);color:var(--st-confirmed-fg);border-color:var(--st-confirmed)}
 .ev .k{font-family:var(--f-mono);font-size:9px;font-weight:600;opacity:.75;flex:none;letter-spacing:.03em}
@@ -258,7 +283,6 @@ textarea.inp{min-height:84px;resize:vertical}
 .drow .dd{flex:1 1 140px;min-width:0}
 .drow .dk{flex:0 0 84px}
 .drow .dst{flex:0 0 112px}
-.drow .loc{flex:1 1 100%}
 .dst-worked{background:var(--st-done);color:var(--st-done-fg)}
 .dst-canceled,.dst-released{background:var(--st-canceled);color:var(--st-canceled-fg)}
 .ibtn{flex:0 0 34px;height:34px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:8px;background:var(--surface);cursor:pointer;font-size:14px;padding:0;color:var(--ink)}
@@ -300,6 +324,7 @@ details.more summary{cursor:pointer;font-weight:600;display:flex;gap:8px;align-i
     </div>
     <nav class="tabs" role="tablist">
       <button class="tab" role="tab" data-tab="calendar" aria-selected="true">Calendar</button>
+      <button class="tab" role="tab" data-tab="booked" aria-selected="false">Booked <span class="count" id="bookedCount" hidden></span></button>
       <button class="tab" role="tab" data-tab="calls" aria-selected="false">Calls <span class="count" id="replyCount" hidden></span></button>
       <button class="tab" role="tab" data-tab="stats" aria-selected="false">Stats</button>
     </nav>
@@ -445,7 +470,9 @@ function render(){
   const needReply = callList().filter(c => c.status === "pending").length;
   const rc = $("#replyCount"); rc.hidden = !needReply; rc.textContent = needReply; rc.className = "count hot";
   if (!S.loaded) return;
+  const bc = $("#bookedCount"); const nb = bookedDays(false).length; bc.hidden = !nb; bc.textContent = nb;
   if (S.tab === "calendar") renderCalendar();
+  else if (S.tab === "booked") renderBooked();
   else if (S.tab === "calls") renderCalls();
   else renderStats();
 }
@@ -527,6 +554,62 @@ function renderCalendar(){
   }
   main.innerHTML = h;
 }
+/* where you go on a given day: call-time place, else the day's place, else the call's */
+function placeOf(c, e){ return e.callPlace || e.loc || (e.kind==="fit" ? c.fitLocation : c.filmLocation) || c.location || ""; }
+function outsideBadge(place){
+  return window.EmailParser && EmailParser.londonCheck(place) === "outside" ? `<span class="outside" title="This job is not in London – plan travel">⚠ Outside London</span>` : "";
+}
+function mapLink(place){ return place ? `<a class="maplink" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}" target="_blank" rel="noopener">Map ↗</a>` : ""; }
+
+/* every booked day (green), soonest first */
+function bookedDays(includePast){
+  const out = [];
+  for (const c of S.calls.values()) for (const e of (c.dates||[])){
+    const st = dayStatus(c, e);
+    if (st === "confirmed" || (includePast && st === "done")) if (includePast || e.d >= TODAY) out.push({c, e});
+  }
+  return out.sort((a,b) => a.e.d.localeCompare(b.e.d) || (a.e.callTime||"99").localeCompare(b.e.callTime||"99"));
+}
+function daysAway(d){
+  const n = Math.round((parse(d) - parse(TODAY)) / 864e5);
+  return n === 0 ? "Today" : n === 1 ? "Tomorrow" : n > 1 ? `in ${n} days` : `${-n} days ago`;
+}
+
+/* The Booked tab: date · call time · production · location, one line per booked day */
+function renderBooked(){
+  const rows = bookedDays(S.showPastBooked);
+  const ahead = rows.filter(x => x.e.d >= TODAY);
+  const outside = ahead.filter(x => EmailParser.londonCheck(placeOf(x.c, x.e)) === "outside").length;
+  const next = ahead[0];
+  let h = "";
+  if (next){
+    const pl = placeOf(next.c, next.e);
+    h += `<section class="nextjob" data-open="${next.c.id}" role="button" tabindex="0">
+      <span class="lbl">Your next job · ${daysAway(next.e.d)}</span>
+      <h2>${esc(nameOf(next.c))}</h2>
+      <div class="nj-line"><b>${fmtShort(next.e.d)}</b>${next.e.kind==="fit"?" · Fitting":""}${next.e.callTime?` · Call <b>${esc(next.e.callTime)}</b>`:` · <span class="muted">call time not in yet</span>`}${pl?` · ${esc(pl)}`:""} ${outsideBadge(pl)}</div>
+    </section>`;
+  }
+  h += `<div class="bar"><span class="src">${ahead.length} booked day${ahead.length===1?"":"s"} ahead${outside?` · <b style="color:var(--attn)">${outside} outside London</b>`:""}</span><span style="flex:1"></span>
+    <label class="tog"><input type="checkbox" id="showPastBooked" ${S.showPastBooked?"checked":""}> Show past days</label></div>`;
+  if (!rows.length) h += `<div class="empty"><h2>No booked days yet</h2><p>When a job is confirmed (by you, or by a booking email), its days appear here with call times and locations.</p></div>`;
+  else {
+    h += `<div class="btable"><div class="bhead"><span>Date</span><span>Call time</span><span>Production</span><span>Location</span></div>`;
+    for (const {c, e} of rows){
+      const pl = placeOf(c, e);
+      const st = dayStatus(c, e);
+      h += `<div class="brow${e.d < TODAY ? " past" : ""}">
+        <div class="bdate"><button type="button" class="upday ${clsS(st)}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${DAY_TIP}">${fmtShort(e.d)}${st==="done"?" ✓":""}</button><small>${daysAway(e.d)}</small></div>
+        <div class="btime">${e.callTime ? `<b>${esc(e.callTime)}</b>` : `<span class="muted">waiting for call time</span>`}${e.night ? " ☾" : ""}</div>
+        <div class="bprod" data-open="${c.id}" role="button" tabindex="0"><b>${esc(nameOf(c))}</b> <span class="kind">${e.kind==="fit"?"Fitting":"Shoot"}</span><small>${esc([c.agency, c.role].filter(Boolean).join(" · "))}</small></div>
+        <div class="bplace">${pl ? esc(pl) : `<span class="muted">location not known</span>`} ${mapLink(pl)} ${outsideBadge(pl)}</div>
+      </div>`;
+    }
+    h += `</div>`;
+  }
+  main.innerHTML = h;
+}
+
 /* Reply buttons: the agency's own links (opened in a new tab) + one tap to record your answer.
    Yes/No links (e.g. True Edge) record your answer as you tap them. */
 function replyHTML(c){
@@ -578,8 +661,8 @@ function upCard(c, cl){
     if (!list.length) return "";
     return `<div class="uprow"><span class="uplab">${kind==="fit"?"Fitting":"Shoot"}</span><span class="updays">${list.map(e => {
       const st = dayStatus(c,e); const off = st==="released"||st==="canceled";
-      const where = e.loc || (kind==="fit" ? c.fitLocation : c.filmLocation) || "";
-      return `<button type="button" class="upday ${clsS(st)}${off?" off":""}${cl.has(e.d)&&!off?" upclash":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${esc(SMAP[st]?.label||"")}${cl.has(e.d)?" · clash with another call":""} · ${DAY_TIP}">${fmtShort(e.d)}${e.night?" ☾":""}${where?` <small>@ ${esc(where)}</small>`:""}${off?` <small>(${st})</small>`:""}${st==="done"?" ✓ worked":""}</button>`;
+      const where = placeOf(c, e);
+      return `<button type="button" class="upday ${clsS(st)}${off?" off":""}${cl.has(e.d)&&!off?" upclash":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${esc(SMAP[st]?.label||"")}${cl.has(e.d)?" · clash with another call":""} · ${DAY_TIP}">${fmtShort(e.d)}${e.night?" ☾":""}${e.callTime?` <small>· call ${esc(e.callTime)}</small>`:""}${where?` <small>@ ${esc(where)}</small>`:""}${off?` <small>(${st})</small>`:""}${st==="done"?" ✓ worked":""}</button>`;
     }).join("")}</span></div>`;
   };
   const du = c.status === "pending" ? dueText(c.respondBy) : null;
@@ -588,7 +671,7 @@ function upCard(c, cl){
     <div class="uphead" data-open="${c.id}" role="button" tabindex="0">
       <span class="upst ${clsS(c.status)}">${esc(MEANS[c.status]||c.status)}</span>
       <h4>${esc(nameOf(c))}</h4>
-      <div class="upmeta">${esc([c.agency, c.role].filter(Boolean).join(" · "))}${du?` · <b class="due${du.late?" late":""}">${esc(du.txt)}</b>`:""}${c.review?` · <b style="color:var(--accent)">check details</b>`:""}</div>
+      <div class="upmeta">${outsideBadge(c.location || c.filmLocation || c.fitLocation || (c.dates||[]).map(e=>e.loc).find(Boolean) || "")} ${esc([c.agency, c.role].filter(Boolean).join(" · "))}${du?` · <b class="due${du.late?" late":""}">${esc(du.txt)}</b>`:""}${c.review?` · <b style="color:var(--accent)">check details</b>`:""}</div>
     </div>
     ${line("fit")}${line("film")}
     ${acts?`<div class="upacts">${acts}</div>`:""}
@@ -772,15 +855,15 @@ function drawEditor(){
       <div class="fld"><span class="lbl">Dates</span>
         <div id="drows" class="drows">${d.dates.map((e,i) => {
           const st = e.state || (e.done ? "worked" : "");
-          const showLoc = !!e.loc || openLoc.has(i);
+          const showLoc = !!(e.loc || e.callPlace || e.callTime) || openLoc.has(i);
           return `<div class="drow" data-i="${i}">
             <input class="inp dd" type="date" id="dd-${i}" value="${e.d}" aria-label="Date">
             <select class="inp dk" id="dk-${i}" aria-label="Fitting or shoot"><option value="film"${e.kind==="film"?" selected":""}>Shoot</option><option value="fit"${e.kind==="fit"?" selected":""}>Fit</option></select>
             <select class="inp dst dst-${st||"auto"}" id="dst-${i}" aria-label="What happened this day"><option value=""${st===""?" selected":""}>Auto</option><option value="worked"${st==="worked"?" selected":""}>Done ✓</option><option value="canceled"${st==="canceled"?" selected":""}>Canceled</option><option value="released"${st==="released"?" selected":""}>Released</option></select>
             <label class="ibtn" title="Night shoot"><input type="checkbox" id="dn-${i}" ${e.night?"checked":""}><span aria-hidden="true">☾</span><span class="sr">Night</span></label>
-            <button type="button" class="ibtn${showLoc?" on":""}" data-showloc="${i}" title="Add a place for this day" aria-label="Place">📍</button>
+            <button type="button" class="ibtn${showLoc?" on":""}" data-showloc="${i}" title="Place and call time for this day" aria-label="Place and call time">📍</button>
             <button type="button" class="ibtn" data-deldate="${i}" title="Remove this date" aria-label="Remove date">✕</button>
-            <input class="inp loc" id="dl-${i}" placeholder="Place for this day" value="${esc(e.loc||"")}"${showLoc?"":" hidden"}>
+            <div class="dextra"${showLoc?"":" hidden"}><input class="inp loc" id="dl-${i}" placeholder="Place for this day" value="${esc(e.callPlace||e.loc||"")}"><label class="ct">Call <input class="inp" type="time" id="dct-${i}" value="${esc(e.callTime||"")}"></label></div>
           </div>`;}).join("")}</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" data-adddate="film">+ Shoot date</button><button class="btn small" data-adddate="fit">+ Fitting date</button></div>
         <p class="src" style="margin:0">Auto = coloured by the call's status. Change one day to Done, Canceled or Released when only that day changed.</p></div>
@@ -816,6 +899,7 @@ function pullForm(){
     const dd = $("#dd-"+i, layer); if (!dd) return e;
     const o = {d: dd.value, kind: $("#dk-"+i, layer).value};
     const l = $("#dl-"+i, layer).value.trim(); if (l) o.loc = l;
+    const ct = $("#dct-"+i, layer)?.value; if (ct) o.callTime = ct;
     if ($("#dn-"+i, layer).checked) o.night = true;
     const st = $("#dst-"+i, layer).value;
     if (st) o.state = st;
@@ -967,10 +1051,11 @@ document.addEventListener("click", e => {
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && layer.innerHTML) closeSheet();
-  if (e.key === "Enter" && e.target.matches(".row .body, .uphead")) openEditor(e.target.dataset.open);
+  if (e.key === "Enter" && e.target.matches(".row .body, .uphead, .bprod, .nextjob")) openEditor(e.target.dataset.open);
 });
 document.addEventListener("change", e => {
   if (e.target.classList.contains("dst")) e.target.className = "inp dst dst-" + (e.target.value || "auto");
+  if (e.target.id === "showPastBooked"){ S.showPastBooked = e.target.checked; renderBooked(); }
   if (e.target.id === "statusSel"){ S.listStatus = e.target.value; save("listStatus", S.listStatus); renderCalls(); }
   if (e.target.id === "agencySel"){ S.agency = e.target.value; renderCalls(); }
   if (e.target.id === "sortSel"){ S.sort = e.target.value; save("sort", S.sort); renderCalls(); }
