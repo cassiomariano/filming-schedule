@@ -187,6 +187,7 @@ main{max-width:1240px;margin:0 auto;padding-inline:16px;padding-block:16px 48px;
 .dchip{font-family:var(--f-mono);font-size:11px;border:1px solid var(--line);border-radius:4px;padding:1px 6px;white-space:nowrap;background:var(--surface-2)}
 .dchip.fit{border-style:dashed}
 .dchip.past{opacity:.5}
+.dchip.off{text-decoration:line-through;color:var(--faint)}
 .row .acts{display:flex;flex-direction:column;gap:6px;padding:10px 12px 10px 0;justify-content:center}
 .due{font-family:var(--f-mono);font-size:11px;font-weight:600}
 .due.late{color:var(--attn)}
@@ -233,8 +234,9 @@ textarea.inp{min-height:84px;resize:vertical}
 .status-pick{display:flex;flex-wrap:wrap;gap:6px}
 .status-pick button{border-radius:20px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;border:2px solid transparent}
 .status-pick button[aria-pressed="true"]{border-color:var(--ink);box-shadow:0 0 0 2px var(--surface) inset}
-.drow{display:grid;grid-template-columns:132px 92px minmax(0,1fr) auto auto;gap:6px;align-items:center}
-@media (max-width:520px){.drow{grid-template-columns:1fr 1fr;}.drow .loc{grid-column:1/-1}}
+.drow{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1.3fr) auto auto;gap:6px;align-items:center;padding-bottom:8px;border-bottom:1px solid var(--line)}
+.drow .loc{grid-column:1/-1;order:9}
+@media (max-width:520px){.drow{grid-template-columns:1fr 1fr}}
 .tog{display:inline-flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap}
 .drop{border:2px dashed var(--line);border-radius:10px;padding:16px;text-align:center;color:var(--muted);display:flex;flex-direction:column;gap:8px;align-items:center}
 .drop.over{border-color:var(--accent);background:var(--accent-soft)}
@@ -350,6 +352,16 @@ function lastDate(c){ const all = (c.dates||[]).map(e => e.d).sort(); return all
 const AGENCY_ALIASES = {extrapeople:"Extra People",two10:"Two 10 Casting",two10casting:"Two 10 Casting",castingcollective:"Casting Collective",keycasting:"Key Casting",universalextras:"Universal Extras",lucasextras:"Lucas Extras",cameraactionextras:"Camera Action Extras",cameraaction:"Camera Action Extras",wilkins:"Wilkins Casting",wilkinscasting:"Wilkins Casting",wilkinscastingltd:"Wilkins Casting",sabellcasting:"Sabell Casting",sabell:"Sabell Casting",bbbtalent:"BBB Talent",bbb:"BBB Talent",bbbtalentagency:"BBB Talent",bbbtalentteam:"BBB Talent",onsetextras:"On Set Extras",onset:"On Set Extras",trueedge:"True Edge",castingcollectiveltd:"Casting Collective"};
 function normAgency(a){ const s = (a||"").trim(); const k = s.toLowerCase().replace(/[^a-z0-9]/g,""); return AGENCY_ALIASES[k] || s; }
 
+/* the status of ONE day: a single day can be released, canceled or worked
+   even when the rest of the booking is still on */
+const DAY_STATES = [["", "Same as the call"], ["worked", "Worked"], ["released", "Released"], ["canceled", "Canceled"]];
+function dayStatus(c, e){
+  if (e.state === "released") return "released";
+  if (e.state === "canceled") return "canceled";
+  if (e.state === "worked" || e.done) return "done";
+  return c.status;
+}
+
 /* entries per day for the calendar */
 function dayIndex(){
   const m = new Map();
@@ -359,15 +371,15 @@ function dayIndex(){
       m.get(e.d).push({c, e});
     }
   }
-  for (const arr of m.values()) arr.sort((a,b) => PRIORITY[a.c.status]-PRIORITY[b.c.status] || (a.c.project||"").localeCompare(b.c.project||""));
+  for (const arr of m.values()) arr.sort((a,b) => PRIORITY[dayStatus(a.c,a.e)]-PRIORITY[dayStatus(b.c,b.e)] || (a.c.project||"").localeCompare(b.c.project||""));
   return m;
 }
 function clashes(idx){
   const out = new Map();
   for (const [d, arr] of idx){
-    const act = arr.filter(x => ACTIVE.has(x.c.status));
+    const act = arr.filter(x => ACTIVE.has(dayStatus(x.c, x.e)));
     const ids = new Set(act.map(x => x.c.id));
-    if (ids.size >= 2 && act.some(x => x.c.status === "confirmed")) out.set(d, act);
+    if (ids.size >= 2 && act.some(x => dayStatus(x.c, x.e) === "confirmed")) out.set(d, act);
   }
   return out;
 }
@@ -419,7 +431,7 @@ function renderCalendar(){
       <span class="spacer" style="flex:1"></span>
       <div class="seg" role="group" aria-label="Calendar view"><button data-calview="month" aria-pressed="${S.calView==="month"}">Month</button><button data-calview="agenda" aria-pressed="${S.calView==="agenda"}">Agenda</button></div>
     </div>${legendHTML()}`;
-  const vis = x => S.show.has(x.c.status);
+  const vis = x => S.show.has(dayStatus(x.c, x.e));
   if (S.calView === "month"){
     const start = weekStart(m);
     h += `<div class="grid-wrap"><div class="month">${DOW.map(d => `<div class="dow">${d}</div>`).join("")}`;
@@ -448,7 +460,7 @@ function renderCalendar(){
       const dd = parse(d);
       h += `<div class="aday${d===TODAY?" today":""}" id="d-${d}"><div class="adate"><b>${dd.getDate()}</b><span>${DOW[(dd.getDay()+6)%7]} ${MONTHS[dd.getMonth()].slice(0,3)}</span></div><div class="alist">`;
       if (cl.has(d)) h += `<div class="clash-row">⚠ Clash — a confirmed booking overlaps ${cl.get(d).length-1} other call${cl.get(d).length>2?"s":""}</div>`;
-      items.forEach(({c,e}) => h += `<button class="acard" data-open="${c.id}"><span class="bar8 ${clsS(c.status)}"></span><span class="main"><span class="ttl">${e.night?"☾ ":""}${esc(c.project)}${c.attention?` <span class="flag">● attention</span>`:""}</span><span class="sub">${esc([c.agency, c.role, e.loc || (e.kind==="fit"?c.fitLocation:c.filmLocation) || c.location].filter(Boolean).join(" · "))}</span></span><span class="kind">${e.kind==="fit"?"Fitting":"Shoot"}</span></button>`);
+      items.forEach(({c,e}) => { const ds = dayStatus(c,e); h += `<button class="acard" data-open="${c.id}"><span class="bar8 ${clsS(ds)}"></span><span class="main"><span class="ttl"${STRUCK.has(ds)?' style="text-decoration:line-through"':''}>${e.night?"☾ ":""}${esc(c.project)}${ds!==c.status?` <span class="pill ${clsS(ds)}">day ${SMAP[ds].short.toLowerCase()}</span>`:""}${c.attention?` <span class="flag">● attention</span>`:""}</span><span class="sub">${esc([c.agency, c.role, e.loc || (e.kind==="fit"?c.fitLocation:c.filmLocation) || c.location].filter(Boolean).join(" · "))}</span></span><span class="kind">${e.kind==="fit"?"Fitting":"Shoot"}</span></button>`; });
       h += `</div></div>`;
     }
     if (!any) h += `<div class="empty"><h2>Nothing scheduled</h2><p>No dates for the selected statuses between ${fmtDM(from)} and ${fmtDM(to)}.</p></div>`;
@@ -457,8 +469,9 @@ function renderCalendar(){
   main.innerHTML = h;
 }
 function evHTML({c,e}){
-  const title = `${c.project} — ${e.kind==="fit"?"Fitting":"Shoot"}${e.night?" (night)":""} · ${SMAP[c.status]?.short||""}${c.agency?" · "+c.agency:""}`;
-  return `<button class="ev ${clsS(c.status)}${c.attention?" attn":""}${STRUCK.has(c.status)?" x":""}" data-open="${c.id}" title="${esc(title)}"><span class="k">${e.kind==="fit"?"F":"S"}</span><span class="t">${esc(c.project)}</span>${e.night?`<span class="m" aria-label="night">☾</span>`:""}</button>`;
+  const ds = dayStatus(c, e);
+  const title = `${c.project} — ${e.kind==="fit"?"Fitting":"Shoot"}${e.night?" (night)":""} · ${SMAP[ds]?.short||""}${ds!==c.status?" (this day)":""}${c.agency?" · "+c.agency:""}`;
+  return `<button class="ev ${clsS(ds)}${c.attention?" attn":""}${STRUCK.has(ds)?" x":""}" data-open="${c.id}" title="${esc(title)}"><span class="k">${e.kind==="fit"?"F":"S"}</span><span class="t">${esc(c.project)}</span>${e.night?`<span class="m" aria-label="night">☾</span>`:""}</button>`;
 }
 
 function renderCalls(){
@@ -493,7 +506,7 @@ function renderCalls(){
       <div class="body" data-open="${c.id}" role="button" tabindex="0">
         <div class="line1"><span class="proj">${esc(c.project)}</span><span class="pill ${clsS(c.status)}">${SMAP[c.status]?.short||c.status}</span>${c.attention?`<span class="flag">● Attention</span>`:""}</div>
         <div class="meta">${c.agency?`<span><b>${esc(c.agency)}</b></span>`:""}${c.role?`<span>${esc(c.role)}</span>`:""}${(c.location||c.filmLocation)?`<span>📍 ${esc(c.location||c.filmLocation)}</span>`:""}${c.received?`<span>Received ${fmtDM(c.received)}</span>`:""}</div>
-        ${shown.length?`<div class="dates">${shown.map(e => `<span class="dchip ${e.kind}${e.d<TODAY?" past":""}" title="${e.kind==="fit"?"Fitting":"Shoot"}">${e.kind==="fit"?"F ":""}${fmtDM(e.d)}${e.night?" ☾":""}</span>`).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
+        ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"; return `<span class="dchip ${e.kind}${e.d<TODAY?" past":""}${off?" off":""}" title="${e.kind==="fit"?"Fitting":"Shoot"}${st!==c.status?" · "+SMAP[st].short:""}">${e.kind==="fit"?"F ":""}${fmtDM(e.d)}${e.night?" ☾":""}${st==="done"&&c.status!=="done"?" ✓":""}</span>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
         ${du?`<span class="due${du.late?" late":""}">${esc(du.txt)}</span>`:""}
       </div>
       <div class="acts">${c.status==="pending"
@@ -527,7 +540,7 @@ function renderStats(){
   const answered = all.filter(c => c.status !== "pending");
   const yes = answered.filter(c => c.status !== "declined").length;
   const booked = all.filter(c => c.status === "confirmed" || c.status === "done").length;
-  const workDays = new Set(all.filter(c => c.status==="done"||c.status==="confirmed").flatMap(c => (c.dates||[]).filter(e => e.d.slice(0,4) === String(now.getFullYear())).map(e => e.d))).size;
+  const workDays = new Set(all.flatMap(c => (c.dates||[]).filter(e => e.d.slice(0,4) === String(now.getFullYear()) && ["done","confirmed"].includes(dayStatus(c,e))).map(e => e.d))).size;
   const fallback = all.filter(c => !c.received).length;
 
   let h = `<div class="bar"><div class="seg" role="group" aria-label="Count calls by"><button data-basis="received" aria-pressed="${S.basis==="received"}">By date received</button><button data-basis="work" aria-pressed="${S.basis==="work"}">By first work date</button></div>
@@ -636,7 +649,8 @@ function drawEditor(){
       <div class="two"><div class="fld"><label for="f-fitloc">Fitting location</label><input class="inp" id="f-fitloc" value="${esc(d.fitLocation)}"></div>
       <div class="fld"><label for="f-filmloc">Filming location</label><input class="inp" id="f-filmloc" value="${esc(d.filmLocation)}"></div></div>
       <div class="fld"><span class="lbl">Dates</span><div id="drows" style="display:flex;flex-direction:column;gap:6px">${d.dates.map((e,i) => `
-        <div class="drow" data-i="${i}"><input class="inp" type="date" id="dd-${i}" value="${e.d}" aria-label="Date"><select class="inp" id="dk-${i}" aria-label="Type"><option value="film"${e.kind==="film"?" selected":""}>Shoot</option><option value="fit"${e.kind==="fit"?" selected":""}>Fitting</option></select><input class="inp loc" id="dl-${i}" placeholder="Location (optional)" value="${esc(e.loc||"")}"><label class="tog"><input type="checkbox" id="dn-${i}" ${e.night?"checked":""}>☾</label><button class="btn small ghost" data-deldate="${i}" aria-label="Remove date">✕</button></div>`).join("")}</div>
+        <div class="drow" data-i="${i}"><input class="inp" type="date" id="dd-${i}" value="${e.d}" aria-label="Date"><select class="inp" id="dk-${i}" aria-label="Type"><option value="film"${e.kind==="film"?" selected":""}>Shoot</option><option value="fit"${e.kind==="fit"?" selected":""}>Fitting</option></select><input class="inp loc" id="dl-${i}" placeholder="Location (optional)" value="${esc(e.loc||"")}"><select class="inp dst" id="dst-${i}" aria-label="This day">${DAY_STATES.map(([v,l]) => `<option value="${v}"${(e.state||(e.done?"worked":""))===v?" selected":""}>${l}</option>`).join("")}</select><label class="tog"><input type="checkbox" id="dn-${i}" ${e.night?"checked":""}>☾ night</label><button class="btn small ghost" data-deldate="${i}" aria-label="Remove date">✕</button></div>`).join("")}</div>
+        <p class="src" style="margin:2px 0 0">Released or canceled one day of a booking? Change just that day here. The rest of the booking keeps its status.</p>
         <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" data-adddate="film">+ Shoot date</button><button class="btn small" data-adddate="fit">+ Fitting date</button></div></div>
       <div class="fld"><label for="f-rate">Rate / fees</label><input class="inp" id="f-rate" value="${esc(d.rate)}"></div>
       <div class="fld"><label for="f-notes">Notes</label><textarea class="inp" id="f-notes">${esc(d.notes)}</textarea></div>
@@ -661,7 +675,8 @@ function pullForm(){
     const o = {d: dd.value, kind: $("#dk-"+i, layer).value};
     const l = $("#dl-"+i, layer).value.trim(); if (l) o.loc = l;
     if ($("#dn-"+i, layer).checked) o.night = true;
-    if (e.done) o.done = true;
+    const st = $("#dst-"+i, layer).value;
+    if (st) o.state = st;
     return o;
   });
 }
