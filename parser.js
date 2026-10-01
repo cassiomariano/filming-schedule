@@ -116,13 +116,29 @@
   }
 
   // ---------- is this email an availability check? ----------
+  // Words in a SUBJECT that mean "this is not a new availability check"
+  // (thank-you notes, reviews, invitations, reminders, payments, bookings...)
+  var NOT_A_CALL = /thank|review|invit|reminder|newsletter|survey|feedback|payment|paid|invoice|remittance|timesheet|call ?sheet|password|verify|welcome|receipt|profile|update your|your (account|details)|confirm|booked|booking|released|release|cancel|unavailable|no longer/i;
+  // Phrases that only appear in real availability checks
+  var CALL_PHRASES = /availability (enquiry|request|check)|\bav ?check|\bavail\.? ?check|are you (free|available)|who'?s available|put you forward|1st option|2nd option|first option|pencil(led)? (you|for)|let us know (if|who)[^.]{0,40}availab/i;
+
   function isAvailabilityCheck(subject, text) {
     var subj = subject || "";
-    var start = (text || "").slice(0, 2500);
-    var not = /thank you for (letting us know|responding)|invoice|newsletter|payment|remittance|password|verify your|booking confirmation|call ?sheet/i;
-    if (not.test(subj)) return false;
-    var yes = /availab|av check|\bavail\b|enquiry|put you forward|1st option|2nd option|pencil|are you free|who'?s available|are you available/i;
-    return yes.test(subj) || yes.test(start);
+    if (NOT_A_CALL.test(subj)) return false;
+    return CALL_PHRASES.test(subj) || CALL_PHRASES.test((text || "").slice(0, 3000));
+  }
+
+  // What kind of agency email is this?
+  //   "call"     a new availability check  -> becomes a New call
+  //   "booked"   a booking confirmation    -> marks the matching call Confirmed
+  //   "released" a release / cancellation  -> marks the matching call Released
+  //   null       anything else             -> ignored
+  function classifyEmail(subject, text) {
+    var subj = subject || "";
+    if (/thank|review|invit|newsletter|survey|payment|invoice/i.test(subj)) return null;
+    if (/booking confirm|confirmed booking|you('| a)re booked|you have been booked|booked for|booking:\s|is confirmed/i.test(subj)) return "booked";
+    if (/\breleased?\b|cancel+ed|cancellation|no longer (needed|required)|stood down/i.test(subj)) return "released";
+    return isAvailabilityCheck(subj, text) ? "call" : null;
   }
 
   // ---------- find a labelled value, e.g. "Project: Army Of Shadows" ----------
@@ -319,7 +335,7 @@
     return call;
   }
 
-  var api = { parseEmail: parseEmail, htmlToText: htmlToText, isAvailabilityCheck: isAvailabilityCheck, isFromCastingAgency: isFromCastingAgency, AGENCIES: AGENCIES };
+  var api = { parseEmail: parseEmail, htmlToText: htmlToText, isAvailabilityCheck: isAvailabilityCheck, classifyEmail: classifyEmail, isFromCastingAgency: isFromCastingAgency, AGENCIES: AGENCIES };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.EmailParser = api;
 })(this);

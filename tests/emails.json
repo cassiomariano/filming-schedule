@@ -242,5 +242,57 @@
   "expect": {
    "isCall": false
   }
+ },
+ {
+  "name": "Extra People thank-you",
+  "email": {
+   "subject": "Thank you for being available",
+   "fromName": "ExtraPeople",
+   "fromEmail": "noreply@extrapeople.uk.epcastingportal.com",
+   "received": "2026-10-01",
+   "text": "Thank you for responding to the availability enquiry for On-Say."
+  },
+  "expect": {
+   "isCall": false
+  }
+ },
+ {
+  "name": "Extra People job review",
+  "email": {
+   "subject": "Please review your recent job",
+   "fromName": "ExtraPeople",
+   "fromEmail": "noreply@extrapeople.uk.epcastingportal.com",
+   "received": "2026-10-01",
+   "text": "How was your day on set? Leave a review. Are you available for more work?"
+  },
+  "expect": {
+   "isCall": false
+  }
+ },
+ {
+  "name": "Extra People invitation",
+  "email": {
+   "subject": "You are invited: Extra People open day",
+   "fromName": "ExtraPeople",
+   "fromEmail": "noreply@extrapeople.uk.epcastingportal.com",
+   "received": "2026-10-01",
+   "text": "You are invited to our open day on 12 Oct."
+  },
+  "expect": {
+   "isCall": false
+  }
+ },
+ {
+  "name": "Booking confirmation is not a new call",
+  "email": {
+   "subject": "Booking Confirmation - Apple Pie 2 - Fri 9 Oct",
+   "fromName": "Casting Collective",
+   "fromEmail": "bookings@castingcollective.co.uk",
+   "received": "2026-10-01",
+   "text": "You are booked. Project Title: Apple Pie 2"
+  },
+  "expect": {
+   "isCall": false
+  }
  }
 ]

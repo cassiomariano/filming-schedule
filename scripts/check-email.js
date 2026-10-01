@@ -16,7 +16,7 @@ const crypto = require("crypto");
 const { ImapFlow } = require("imapflow");
 const { simpleParser } = require("mailparser");
 const admin = require("firebase-admin");
-const { parseEmail, isAvailabilityCheck, isFromCastingAgency, htmlToText } = require("../parser.js");
+const { parseEmail, isAvailabilityCheck, classifyEmail, isFromCastingAgency, htmlToText } = require("../parser.js");
 
 // ---------- settings (stored as GitHub secrets, never in the code) ----------
 const DAYS_BACK = Number(process.env.DAYS_BACK || 3);
@@ -62,6 +62,12 @@ function emailKey(messageId) {
 function londonDate(date) {
   return new Date(date || Date.now()).toLocaleDateString("en-CA", { timeZone: "Europe/London" });
 }
+// "Apple Pie 2" and "APPLE PIE 2 (Feature)" count as the same production
+function sameProject(a, b) {
+  const x = String(a || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const y = String(b || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return x.length >= 3 && y.length >= 3 && (x === y || x.includes(y) || y.includes(x));
+}
 function sameName(a, b) {
   return String(a || "").toLowerCase().replace(/[^a-z0-9]/g, "") === String(b || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -72,7 +78,7 @@ let existingCalls = null;
 async function loadExistingCalls() {
   if (!existingCalls) {
     const snap = await db.collection("calls").get();
-    existingCalls = snap.docs.map(d => d.data());
+    existingCalls = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   }
   return existingCalls;
 }
@@ -139,7 +145,7 @@ async function notifyPhone(call) {
 }
 
 async function checkAccount(account) {
-  const counts = { looked: 0, alreadySeen: 0, notACall: 0, added: 0 };
+  const counts = { looked: 0, alreadySeen: 0, notACall: 0, added: 0, updated: 0 };
   const client = new ImapFlow({
     host: "imap.mail.yahoo.com",
     port: 993,
@@ -182,13 +188,39 @@ async function checkAccount(account) {
       const from = (mail.from && mail.from.value && mail.from.value[0]) || {};
       const received = londonDate(mail.date);
 
-      if (!isAvailabilityCheck(subject, text)) {
+      const kind = classifyEmail(subject, text);
+      if (!kind) {
         await seenRef.set({ at: new Date().toISOString(), call: null });
         counts.notACall++;
         continue;
       }
 
       const r = parseEmail({ subject, fromName: from.name, fromEmail: from.address, text, received });
+
+      // A booking confirmation or a release: update the matching call, never add a new one
+      if (kind === "booked" || kind === "released") {
+        await loadExistingCalls();
+        const matches = existingCalls.filter(c => c.id && c.project && r.project && sameProject(c.project, r.project) &&
+                                                   (!r.agency || sameName(c.agency, r.agency)) &&
+                                                   ["pending", "available", "confirmed"].includes(c.status));
+        let callId = null;
+        if (matches.length === 1) {
+          const c = matches[0];
+          const status = kind === "booked" ? "confirmed" : "released";
+          const note = (kind === "booked" ? "Booked" : "Released") + " by email on " + received + ": " + subject.slice(0, 120);
+          await db.collection("calls").doc(c.id).update({
+            status: status, updatedAt: new Date().toISOString(),
+            notes: (c.notes ? c.notes + " • " : "") + note,
+          });
+          c.status = status;
+          callId = c.id;
+          counts.updated++;
+          await notifyPhone({ ...c, project: (kind === "booked" ? "BOOKED: " : "Released: ") + c.project });
+        }
+        await seenRef.set({ at: new Date().toISOString(), call: callId });
+        continue;
+      }
+
       const call = {
         project: r.project, agency: r.agency, role: r.role,
         location: r.location, fitLocation: r.fitLocation, filmLocation: r.filmLocation,
@@ -214,7 +246,7 @@ async function checkAccount(account) {
       const callId = "e" + key;
       await db.collection("calls").doc(callId).set(call);
       await seenRef.set({ at: new Date().toISOString(), call: callId });
-      existingCalls.push(call);
+      existingCalls.push({ id: callId, ...call });
       counts.added++;
       await notifyPhone(call);
     }
@@ -252,18 +284,25 @@ async function checkAccount(account) {
   if (process.env.CLEANUP === "true") {
     const snap = await db.collection("calls").get();
     let removed = 0;
+    let flagged = 0;
     for (const doc of snap.docs) {
       const c = doc.data();
-      if (!String(c.source || "").startsWith("email") || c.status !== "pending") continue;
+      if (!String(c.source || "").startsWith("email")) continue;          // never touch your own entries
       const m = String(c.emailFrom || "").match(/^(.*?)\s*<([^>]*)>/) || [];
-      if (!isFromCastingAgency(m[1], m[2], knownAgencies) || !isAvailabilityCheck(c.emailSubject, c.rawEmail)) {
+      const ok = isFromCastingAgency(m[1], m[2], knownAgencies) && isAvailabilityCheck(c.emailSubject, c.rawEmail);
+      if (ok) continue;
+      if (["confirmed", "done"].includes(c.status)) {
+        // you marked it booked or worked, so keep it but ask you to check it
+        await doc.ref.update({ review: true, reviewReason: "This may not be an availability check. Check it, or delete it" });
+        flagged++;
+      } else {
         await doc.ref.delete();
         removed++;
       }
     }
     existingCalls = null;
     await loadExistingCalls();
-    report("notice", "Clean-up", `Removed ${removed} calls that were not from casting agencies.`);
+    report("notice", "Clean-up", `Removed ${removed} emails that were not availability checks; ${flagged} marked "check details" because you had booked them.`);
   }
 
   let failed = false;
@@ -277,7 +316,7 @@ async function checkAccount(account) {
         await new Promise(r => setTimeout(r, 15000));   // Yahoo sometimes drops the first connection: wait and try once more
         c = await checkAccount(accounts[i]);
       }
-      report("notice", `Account ${i + 1}`, `Looked at ${c.looked} emails: ${c.alreadySeen} already seen, ${c.notACall} not availability checks, ${c.added} new calls added.`);
+      report("notice", `Account ${i + 1}`, `Looked at ${c.looked} emails: ${c.alreadySeen} already seen, ${c.notACall} not availability checks, ${c.added} new calls added, ${c.updated} calls updated (booked/released).`);
     } catch (err) {
       failed = true;
       // only the kind of error (the full message can contain the address)

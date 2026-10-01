@@ -141,7 +141,24 @@ main{max-width:1240px;margin:0 auto;padding-inline:16px;padding-block:16px 48px;
 .day.today .dnum{background:var(--ink);color:var(--bg);border-radius:4px;padding:0 5px}
 .clash{font-family:var(--f-mono);font-size:10px;font-weight:600;color:#fff;background:var(--clash);border-radius:3px;padding:0 4px;letter-spacing:.04em;text-transform:uppercase}
 .ev{display:flex;align-items:center;gap:4px;border-radius:4px;padding:2px 5px;font-size:11.5px;font-weight:600;line-height:1.3;cursor:pointer;border:1px solid transparent;text-align:left;width:100%;min-width:0}
-.ev .k{font-family:var(--f-mono);font-size:10px;font-weight:600;opacity:.8;flex:none}
+h3.wk{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:8px 0 0;font-weight:600}
+.ups{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr));gap:10px}
+.up{background:var(--surface);border:1px solid var(--line);border-left-width:6px;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.s-pending-edge{border-left-color:var(--faint)}.s-available-edge{border-left-color:var(--st-available)}.s-confirmed-edge{border-left-color:var(--st-confirmed)}
+.uphead{cursor:pointer;display:flex;flex-direction:column;gap:3px;min-width:0}
+.uphead h4{margin:0;font-family:var(--f-display);font-weight:800;font-size:24px;line-height:1.05;text-transform:uppercase;letter-spacing:.01em;overflow-wrap:anywhere}
+.upst{align-self:flex-start;font-family:var(--f-mono);font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;border-radius:20px;padding:2px 9px}
+.upmeta{font-size:12.5px;color:var(--muted)}
+.uprow{display:grid;grid-template-columns:64px 1fr;gap:8px;align-items:start}
+.uplab{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-top:4px}
+.updays{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
+.upday{font-size:13px;font-weight:600;border:1px solid var(--line);background:var(--surface-2);border-radius:6px;padding:2px 8px}
+.upday small{font-weight:400;color:var(--muted)}
+.upday.off{text-decoration:line-through;color:var(--faint);font-weight:400}
+.upday.past{opacity:.55}
+.upday.upclash{border-color:var(--clash);box-shadow:inset 0 0 0 1px var(--clash)}
+.upacts{display:flex;gap:6px;flex-wrap:wrap}
+.ev .k{font-family:var(--f-mono);font-size:9px;font-weight:600;opacity:.75;flex:none;letter-spacing:.03em}
 .ev .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .ev .m{flex:none;font-size:11px}
 .ev.attn{box-shadow:inset 3px 0 0 var(--attn)}
@@ -303,6 +320,10 @@ const STATUSES = [
   {k:"canceled",  label:"Canceled", short:"Canceled"},
 ];
 const SMAP = Object.fromEntries(STATUSES.map(s => [s.k, s]));
+/* the name to show for a call: production, else the email subject */
+function nameOf(c){ return (c.project || "").trim() || (c.emailSubject || "").trim() || "No production name – open to add"; }
+/* what each status means, in plain words, for the Upcoming cards */
+const MEANS = {pending:"New – reply needed", available:"Available – waiting to hear", confirmed:"Booked ✓", done:"Worked", declined:"Declined", released:"Released", canceled:"Canceled"};
 const ACTIVE = new Set(["pending","available","confirmed"]);
 const STRUCK = new Set(["declined","released","canceled"]);
 const PRIORITY = {confirmed:0, available:1, pending:2, done:3, released:4, canceled:5, declined:6};
@@ -313,7 +334,7 @@ const MONTHS = ["January","February","March","April","May","June","July","August
 const S = {
   calls: new Map(), loaded:false, db:null, canWrite:true, userEmail:"",
   tab: load("tab","calendar"), cursor: monthStart(new Date()),
-  calView: load("calView", innerWidth < 700 ? "agenda" : "month"),
+  calView: load("calView2", "upcoming"),
   show: new Set(load("show", ["pending","available","confirmed","done"])),
   q:"", agency:"", sort: load("sort","next"), listStatus: load("listStatus","open"),
   basis: load("basis","received"),
@@ -409,12 +430,12 @@ function alertsHTML(idx){
   if (!pend.length && !cl.length && !rev.length) return "";
   let h = `<div class="alerts">`;
   if (rev.length) h += `<section class="alert" style="border-left-color:var(--accent)"><h3>From your email · check details · ${rev.length}</h3><ul>${rev.slice(0,6).map(c =>
-      `<li><button data-open="${c.id}">${esc(c.project || c.emailSubject || "Untitled email")}</button><span class="when">${esc(c.agency||"")}${c.reviewReason ? " · "+esc(c.reviewReason) : ""}</span></li>`).join("")}</ul></section>`;
+      `<li><button data-open="${c.id}">${esc(nameOf(c))}</button><span class="when">${esc(c.agency||"")}${c.reviewReason ? " · "+esc(c.reviewReason) : ""}</span></li>`).join("")}</ul></section>`;
   if (pend.length) h += `<section class="alert reply"><h3>Waiting for your reply · ${pend.length}</h3><ul>${pend.slice(0,6).map(c => {
       const du = dueText(c.respondBy);
-      return `<li><button data-open="${c.id}">${esc(c.project)}</button><span class="when">${esc(c.agency||"")}${du ? " · "+esc(du.txt) : ""}</span></li>`;}).join("")}</ul></section>`;
+      return `<li><button data-open="${c.id}">${esc(nameOf(c))}</button><span class="when">${esc(c.agency||"")}${du ? " · "+esc(du.txt) : ""}</span></li>`;}).join("")}</ul></section>`;
   if (cl.length) h += `<section class="alert"><h3>Booking clashes ahead · ${cl.length}</h3><ul>${cl.slice(0,6).map(([d,arr]) =>
-      `<li><span class="when">${fmtShort(d)}</span><button data-day="${d}">${esc([...new Set(arr.map(x => x.c.project))].join(" / "))}</button></li>`).join("")}</ul></section>`;
+      `<li><span class="when">${fmtShort(d)}</span><button data-day="${d}">${esc([...new Set(arr.map(x => nameOf(x.c)))].join(" / "))}</button></li>`).join("")}</ul></section>`;
   return h + `</div>`;
 }
 
@@ -429,9 +450,14 @@ function renderCalendar(){
       <button class="btn small" data-nav="1" aria-label="Next month">▶</button>
       <h2 class="month-title">${MONTHS[m.getMonth()]} ${m.getFullYear()}</h2>
       <span class="spacer" style="flex:1"></span>
-      <div class="seg" role="group" aria-label="Calendar view"><button data-calview="month" aria-pressed="${S.calView==="month"}">Month</button><button data-calview="agenda" aria-pressed="${S.calView==="agenda"}">Agenda</button></div>
+      <div class="seg" role="group" aria-label="Calendar view"><button data-calview="upcoming" aria-pressed="${S.calView==="upcoming"}">Upcoming</button><button data-calview="month" aria-pressed="${S.calView==="month"}">Month</button><button data-calview="agenda" aria-pressed="${S.calView==="agenda"}">Agenda</button></div>
     </div>${legendHTML()}`;
   const vis = x => S.show.has(dayStatus(x.c, x.e));
+  if (S.calView === "upcoming"){
+    h = alertsHTML(idx) + upcomingHTML(cl);
+    main.innerHTML = h;
+    return;
+  }
   if (S.calView === "month"){
     const start = weekStart(m);
     h += `<div class="grid-wrap"><div class="month">${DOW.map(d => `<div class="dow">${d}</div>`).join("")}`;
@@ -460,7 +486,7 @@ function renderCalendar(){
       const dd = parse(d);
       h += `<div class="aday${d===TODAY?" today":""}" id="d-${d}"><div class="adate"><b>${dd.getDate()}</b><span>${DOW[(dd.getDay()+6)%7]} ${MONTHS[dd.getMonth()].slice(0,3)}</span></div><div class="alist">`;
       if (cl.has(d)) h += `<div class="clash-row">⚠ Clash — a confirmed booking overlaps ${cl.get(d).length-1} other call${cl.get(d).length>2?"s":""}</div>`;
-      items.forEach(({c,e}) => { const ds = dayStatus(c,e); h += `<button class="acard" data-open="${c.id}"><span class="bar8 ${clsS(ds)}"></span><span class="main"><span class="ttl"${STRUCK.has(ds)?' style="text-decoration:line-through"':''}>${e.night?"☾ ":""}${esc(c.project)}${ds!==c.status?` <span class="pill ${clsS(ds)}">day ${SMAP[ds].short.toLowerCase()}</span>`:""}${c.attention?` <span class="flag">● attention</span>`:""}</span><span class="sub">${esc([c.agency, c.role, e.loc || (e.kind==="fit"?c.fitLocation:c.filmLocation) || c.location].filter(Boolean).join(" · "))}</span></span><span class="kind">${e.kind==="fit"?"Fitting":"Shoot"}</span></button>`; });
+      items.forEach(({c,e}) => { const ds = dayStatus(c,e); h += `<button class="acard" data-open="${c.id}"><span class="bar8 ${clsS(ds)}"></span><span class="main"><span class="ttl"${STRUCK.has(ds)?' style="text-decoration:line-through"':''}>${e.night?"☾ ":""}${esc(nameOf(c))}${ds!==c.status?` <span class="pill ${clsS(ds)}">day ${SMAP[ds].short.toLowerCase()}</span>`:""}${c.attention?` <span class="flag">● attention</span>`:""}</span><span class="sub">${esc([c.agency, c.role, e.loc || (e.kind==="fit"?c.fitLocation:c.filmLocation) || c.location].filter(Boolean).join(" · "))}</span></span><span class="kind">${e.kind==="fit"?"Fitting":"Shoot"}</span></button>`; });
       h += `</div></div>`;
     }
     if (!any) h += `<div class="empty"><h2>Nothing scheduled</h2><p>No dates for the selected statuses between ${fmtDM(from)} and ${fmtDM(to)}.</p></div>`;
@@ -468,10 +494,64 @@ function renderCalendar(){
   }
   main.innerHTML = h;
 }
+/* Upcoming: one card per job — name, your status, fitting days, shoot days */
+function upcomingHTML(cl){
+  const active = ["pending","available","confirmed"];
+  const jobs = callList()
+    .filter(c => active.includes(c.status) && (c.dates||[]).some(e => e.d >= TODAY))
+    .sort((a,b) => nextDate(a).localeCompare(nextDate(b)));
+  const undated = callList().filter(c => active.includes(c.status) && !(c.dates||[]).length);
+  let h = `<div class="bar"><h2 class="month-title" style="margin:0">Upcoming</h2><span class="src">${jobs.length} jobs with dates ahead · booked first in each week</span><span style="flex:1"></span>
+    <div class="seg" role="group" aria-label="Calendar view"><button data-calview="upcoming" aria-pressed="true">Upcoming</button><button data-calview="month" aria-pressed="false">Month</button><button data-calview="agenda" aria-pressed="false">Agenda</button></div></div>`;
+  if (!jobs.length) h += `<div class="empty"><h2>Nothing coming up</h2><p>New availability checks appear here as soon as they arrive.</p></div>`;
+  // group by the week of the next date
+  const thisWeek = key(weekStart(new Date()));
+  const nextWeekD = weekStart(new Date()); nextWeekD.setDate(nextWeekD.getDate()+7);
+  const nextWeek = key(nextWeekD);
+  let lastWeek = null;
+  const order = {confirmed:0, pending:1, available:2};
+  const groups = {};
+  for (const c of jobs){ const w = key(weekStart(parse(nextDate(c)))); (groups[w] = groups[w] || []).push(c); }
+  for (const w of Object.keys(groups).sort()){
+    const label = w === thisWeek ? "This week" : w === nextWeek ? "Next week" : "Week of " + fmtShort(w);
+    h += `<h3 class="wk">${label}</h3><div class="ups">`;
+    groups[w].sort((a,b) => order[a.status]-order[b.status] || nextDate(a).localeCompare(nextDate(b)));
+    for (const c of groups[w]) h += upCard(c, cl);
+    h += `</div>`;
+  }
+  if (undated.length) h += `<h3 class="wk">No dates yet</h3><div class="ups">${undated.map(c => upCard(c, cl)).join("")}</div>`;
+  return h;
+}
+function upCard(c, cl){
+  const days = (c.dates||[]).slice().sort((a,b)=>a.d.localeCompare(b.d));
+  const line = kind => {
+    const list = days.filter(e => e.kind === kind);
+    if (!list.length) return "";
+    return `<div class="uprow"><span class="uplab">${kind==="fit"?"Fitting":"Shoot"}</span><span class="updays">${list.map(e => {
+      const st = dayStatus(c,e); const off = st==="released"||st==="canceled";
+      const where = e.loc || (kind==="fit" ? c.fitLocation : c.filmLocation) || "";
+      return `<span class="upday${off?" off":""}${e.d<TODAY?" past":""}${cl.has(e.d)&&!off?" upclash":""}" title="${esc(SMAP[st]?.label||"")}${cl.has(e.d)?" · clash with another call":""}">${fmtShort(e.d)}${e.night?" ☾":""}${where?` <small>@ ${esc(where)}</small>`:""}${off?` <small>(${st})</small>`:""}${st==="done"?" ✓":""}</span>`;
+    }).join("")}</span></div>`;
+  };
+  const du = c.status === "pending" ? dueText(c.respondBy) : null;
+  const acts = c.status==="pending"
+    ? `<button class="btn small" data-set="available" data-id="${c.id}">✓ Accept</button><button class="btn small" data-set="declined" data-id="${c.id}">✕ Decline</button>`
+    : c.status==="available" ? `<button class="btn small" data-set="confirmed" data-id="${c.id}">I'm booked</button><button class="btn small" data-set="released" data-id="${c.id}">Released</button>` : "";
+  return `<article class="up ${clsS(c.status)}-edge">
+    <div class="uphead" data-open="${c.id}" role="button" tabindex="0">
+      <span class="upst ${clsS(c.status)}">${esc(MEANS[c.status]||c.status)}</span>
+      <h4>${esc(nameOf(c))}</h4>
+      <div class="upmeta">${esc([c.agency, c.role].filter(Boolean).join(" · "))}${du?` · <b class="due${du.late?" late":""}">${esc(du.txt)}</b>`:""}${c.review?` · <b style="color:var(--accent)">check details</b>`:""}</div>
+    </div>
+    ${line("fit")}${line("film")}
+    ${acts?`<div class="upacts">${acts}</div>`:""}
+  </article>`;
+}
+
 function evHTML({c,e}){
   const ds = dayStatus(c, e);
-  const title = `${c.project} — ${e.kind==="fit"?"Fitting":"Shoot"}${e.night?" (night)":""} · ${SMAP[ds]?.short||""}${ds!==c.status?" (this day)":""}${c.agency?" · "+c.agency:""}`;
-  return `<button class="ev ${clsS(ds)}${c.attention?" attn":""}${STRUCK.has(ds)?" x":""}" data-open="${c.id}" title="${esc(title)}"><span class="k">${e.kind==="fit"?"F":"S"}</span><span class="t">${esc(c.project)}</span>${e.night?`<span class="m" aria-label="night">☾</span>`:""}</button>`;
+  const title = `${nameOf(c)} — ${e.kind==="fit"?"Fitting":"Shoot"}${e.night?" (night)":""} · ${SMAP[ds]?.short||""}${ds!==c.status?" (this day)":""}${c.agency?" · "+c.agency:""}`;
+  return `<button class="ev ${clsS(ds)}${c.attention?" attn":""}${STRUCK.has(ds)?" x":""}" data-open="${c.id}" title="${esc(title)}"><span class="k">${e.kind==="fit"?"FIT":"SHOOT"}</span><span class="t">${esc(nameOf(c))}</span>${e.night?`<span class="m" aria-label="night">☾</span>`:""}${ds==="confirmed"?`<span class="m" aria-label="booked">✓</span>`:ds==="pending"?`<span class="m" aria-label="reply needed">!</span>`:""}</button>`;
 }
 
 function renderCalls(){
@@ -504,7 +584,7 @@ function renderCalls(){
     const shown = ds.length > 8 ? ds.filter(e => e.d >= TODAY).slice(0,8) : ds;
     h += `<article class="row"><span class="stripe ${clsS(c.status)}"></span>
       <div class="body" data-open="${c.id}" role="button" tabindex="0">
-        <div class="line1"><span class="proj">${esc(c.project)}</span><span class="pill ${clsS(c.status)}">${SMAP[c.status]?.short||c.status}</span>${c.attention?`<span class="flag">● Attention</span>`:""}</div>
+        <div class="line1"><span class="proj">${esc(nameOf(c))}</span><span class="pill ${clsS(c.status)}">${SMAP[c.status]?.short||c.status}</span>${c.attention?`<span class="flag">● Attention</span>`:""}</div>
         <div class="meta">${c.agency?`<span><b>${esc(c.agency)}</b></span>`:""}${c.role?`<span>${esc(c.role)}</span>`:""}${(c.location||c.filmLocation)?`<span>📍 ${esc(c.location||c.filmLocation)}</span>`:""}${c.received?`<span>Received ${fmtDM(c.received)}</span>`:""}</div>
         ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"; return `<span class="dchip ${e.kind}${e.d<TODAY?" past":""}${off?" off":""}" title="${e.kind==="fit"?"Fitting":"Shoot"}${st!==c.status?" · "+SMAP[st].short:""}">${e.kind==="fit"?"F ":""}${fmtDM(e.d)}${e.night?" ☾":""}${st==="done"&&c.status!=="done"?" ✓":""}</span>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
         ${du?`<span class="due${du.late?" late":""}">${esc(du.txt)}</span>`:""}
@@ -800,11 +880,11 @@ document.addEventListener("click", e => {
   if ("close" in ds){ closeSheet(); return; }
   if (ds.open && !ds.set){ openEditor(ds.open); return; }
   if (ds.day){
-    S.cursor = monthStart(parse(ds.day)); S.calView = "agenda"; S.tab = "calendar"; save("calView","agenda"); render();
+    S.cursor = monthStart(parse(ds.day)); S.calView = "agenda"; S.tab = "calendar"; save("calView2","agenda"); render();
     requestAnimationFrame(() => document.getElementById("d-"+ds.day)?.scrollIntoView({block:"center"})); return;
   }
   if (ds.nav !== undefined){ const n = +ds.nav; S.cursor = n === 0 ? monthStart(new Date()) : new Date(S.cursor.getFullYear(), S.cursor.getMonth()+n, 1); render(); return; }
-  if (ds.calview){ S.calView = ds.calview; save("calView", S.calView); render(); return; }
+  if (ds.calview){ S.calView = ds.calview; save("calView2", S.calView); render(); return; }
   if (ds.show){ S.show.has(ds.show) ? S.show.delete(ds.show) : S.show.add(ds.show); save("show", [...S.show]); render(); return; }
   if (ds.basis){ S.basis = ds.basis; save("basis", S.basis); render(); return; }
   if (ds.set){ setStatus(ds.id, ds.set); return; }
@@ -823,7 +903,7 @@ document.addEventListener("click", e => {
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && layer.innerHTML) closeSheet();
-  if (e.key === "Enter" && e.target.matches(".row .body")) openEditor(e.target.dataset.open);
+  if (e.key === "Enter" && e.target.matches(".row .body, .uphead")) openEditor(e.target.dataset.open);
 });
 document.addEventListener("change", e => {
   if (e.target.id === "statusSel"){ S.listStatus = e.target.value; save("listStatus", S.listStatus); renderCalls(); }
