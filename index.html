@@ -870,7 +870,18 @@ function showLogin(msg){
     e.preventDefault();
     $("#lg-msg").textContent = "";
     try { await firebase.auth().signInWithEmailAndPassword($("#lg-email").value.trim(), $("#lg-pass").value); }
-    catch (err) { $("#lg-msg").textContent = "Wrong email or password. Use the account you created in Firebase."; }
+    catch (err) {
+      const why = {
+        "auth/invalid-credential": "Wrong email or password. If you just reset it, use the NEW password.",
+        "auth/wrong-password": "Wrong password. If you just reset it, use the NEW password.",
+        "auth/user-not-found": "There is no account with this email. Use one of the emails added in Firebase → Authentication → Users.",
+        "auth/invalid-email": "That email address doesn't look right. Check for a missing letter or an extra space.",
+        "auth/too-many-requests": "Too many tries. Wait a few minutes, or reset the password with the link below.",
+        "auth/network-request-failed": "No connection to Firebase. Check the phone's internet (Wi-Fi or data) and try again.",
+        "auth/user-disabled": "This account is switched off in Firebase.",
+      }[err.code];
+      $("#lg-msg").textContent = (why || "Couldn't sign in.") + " (" + (err.code || err.message) + ")";
+    }
   });
 }
 (function boot(){
@@ -907,7 +918,11 @@ function showLogin(msg){
       if (hadFocus) $("#q")?.focus();
     }, err => {
       setSync("err", "Can't reach the database");
-      if (err.code === "permission-denied") showLogin("This account isn't allowed to open the schedule. Check the Firestore rules (SETUP.md step 4).");
+      if (err.code === "permission-denied") {
+        const who = firebase.auth().currentUser?.email || "this account";
+        firebase.auth().signOut();
+        showLogin("You signed in as " + who + ", but that email isn't in the database rules, so the schedule stays locked. Sign in with the other email, or add this one in Firebase → Firestore → Rules.");
+      }
     });
   });
 })();
