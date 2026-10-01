@@ -102,6 +102,36 @@ The robot only **reads** emails. It never deletes them, moves them or marks them
 
 ---
 
+## Faster checks (every 5 minutes) and phone alerts
+
+GitHub's own timer is unreliable: it often runs late or skips. A free online timer at cron-job.org starts the check every 5 minutes instead.
+
+**A. Make a GitHub key that can only start the check**
+1. Open **https://github.com/settings/personal-access-tokens/new**.
+2. Token name: `cron-job filming`. Expiration: **1 year** (set a reminder to renew it).
+3. Repository access: **Only select repositories**, then choose **filming-schedule**.
+4. Permissions → Repository permissions → **Actions: Read and write**. Leave everything else as it is.
+5. Click **Generate token** and copy it. It starts with `github_pat_`.
+
+**B. Set up the timer**
+1. Create a free account at **https://cron-job.org** and click **Create cronjob**.
+2. Title: `Filming schedule check`.
+   URL: `https://api.github.com/repos/cassiomariano/filming-schedule/actions/workflows/check-email.yml/dispatches`
+3. Execution schedule: **Every 5 minutes**.
+4. Open the **Advanced** tab:
+   - Request method: **POST**
+   - Headers (add three):
+     - `Authorization` = `Bearer ` followed by your token
+     - `Accept` = `application/vnd.github+json`
+     - `Content-Type` = `application/json`
+   - Request body: `{"ref":"main"}`
+5. Click **Create**. Use **Test run**: a reply of **204** means it worked.
+
+**C. Phone alerts**
+1. Install the free **ntfy** app (App Store or Google Play).
+2. In the app, tap **+** and subscribe to your private topic name. Claude gave you this name; it starts with `filming-`. Keep it private, because anyone who knows it can read the alerts.
+3. Add a GitHub secret named `NTFY_TOPIC` with the same topic name.
+
 ## Good to know
 
 - **Calls added from email** start as **New** and appear under **"From your email · check details"** when something was missing. Missing items might be the production name or dates, which happens with "view ASAP" emails whose details are only behind the agency's Respond link. They also appear there when it looks like a call you already have. Open the call, fix the details using the original email shown at the bottom, and save.

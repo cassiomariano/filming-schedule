@@ -1,5 +1,7 @@
-# Reads your Yahoo inboxes every 30 minutes and adds new availability checks
-# to your schedule. You can also run it by hand: Actions tab → "Check email" → Run workflow.
+# Reads your Yahoo inboxes and adds new availability checks to your schedule.
+# It is started every 5 minutes by a free timer at cron-job.org (see SETUP.md "Faster checks"),
+# with GitHub's own schedule below as a back-up. You can also run it by hand:
+# Actions tab → "Check email" → Run workflow.
 name: Check email
 
 on:
@@ -9,7 +11,7 @@ on:
     inputs:
       days_back:
         description: "How many days of email to look at"
-        default: "3"
+        default: "2"
       cleanup:
         description: "Also remove wrongly added calls (not from casting agencies)"
         type: boolean
@@ -31,8 +33,9 @@ jobs:
       - run: npm ci --omit=dev
       - run: node scripts/check-email.js
         env:
-          DAYS_BACK: ${{ github.event.inputs.days_back || '3' }}
+          DAYS_BACK: ${{ github.event.inputs.days_back || '2' }}
           CLEANUP: ${{ github.event.inputs.cleanup || 'false' }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           YAHOO_EMAIL_1: ${{ secrets.YAHOO_EMAIL_1 }}
           YAHOO_APP_PASSWORD_1: ${{ secrets.YAHOO_APP_PASSWORD_1 }}

@@ -89,6 +89,55 @@ function trustedAgencies(calls) {
   return [...names];
 }
 
+// The agency names are kept in one small database document ("meta/agencies") and
+// rebuilt from your schedule at most once a day. Reading the whole schedule on every
+// 5-minute check would use up Firebase's free daily allowance.
+async function getKnownAgencies() {
+  const ref = db.collection("meta").doc("agencies");
+  const snap = await ref.get();
+  const data = snap.exists ? snap.data() : null;
+  const dayOld = !data || Date.now() - new Date(data.updatedAt).getTime() > 24 * 60 * 60 * 1000;
+  if (!dayOld && process.env.CLEANUP !== "true") return data.names || [];
+  await loadExistingCalls();
+  const names = trustedAgencies(existingCalls);
+  await ref.set({ names: names, updatedAt: new Date().toISOString() });
+  return names;
+}
+
+// ---------- phone notification (free ntfy app) ----------
+// Sends the new call to your phone. The topic name works like a password: keep it private.
+async function notifyPhone(call) {
+  const topic = process.env.NTFY_TOPIC;
+  if (!topic) return;
+  const days = (call.dates || []).map(d => {
+    const t = new Date(d.d + "T12:00:00");
+    return (d.kind === "fit" ? "Fitting " : "") + t.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+  }).join(", ");
+  const lines = [
+    call.agency || "",
+    call.role ? "Role: " + call.role : "",
+    days ? "Dates: " + days : "Dates: see the email",
+    call.location ? "Where: " + call.location : "",
+    call.respondBy ? "Reply by: " + call.respondBy.replace("T", " ") : "",
+  ].filter(Boolean);
+  try {
+    await fetch("https://ntfy.sh/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        topic: topic,
+        title: "New AV check: " + (call.project || call.emailSubject || "availability check"),
+        message: lines.join("\n"),
+        tags: ["clapper"],
+        priority: 4,
+        click: "https://cassiomariano.github.io/filming-schedule/",
+      }),
+    });
+  } catch (e) {
+    report("warning", "Phone", "Could not send the phone notification (" + (e.code || e.name) + ").");
+  }
+}
+
 async function checkAccount(account) {
   const counts = { looked: 0, alreadySeen: 0, notACall: 0, added: 0 };
   const client = new ImapFlow({
@@ -167,6 +216,7 @@ async function checkAccount(account) {
       await seenRef.set({ at: new Date().toISOString(), call: callId });
       existingCalls.push(call);
       counts.added++;
+      await notifyPhone(call);
     }
   } finally {
     lock.release();
@@ -185,8 +235,7 @@ async function checkAccount(account) {
       " | key is for project '" + serviceAccount.project_id + "', account type '" + who + "'");
     process.exit(1);
   }
-  await loadExistingCalls();
-  knownAgencies = trustedAgencies(existingCalls);
+  knownAgencies = await getKnownAgencies();
 
   // Clean-up (run by hand with "clean up" ticked): remove calls the robot added from
   // senders that are not casting agencies, if you haven't changed them yet.
