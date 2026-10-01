@@ -40,9 +40,13 @@ if (!accounts.length) {
   process.exit(1);
 }
 
+// read the key file. TextEdit sometimes turns " into “smart quotes” when you copy,
+// so put normal quotes back and ignore anything before the first { or after the last }.
 let serviceAccount;
 try {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  let raw = process.env.FIREBASE_SERVICE_ACCOUNT.replace(/[“”„‟″]/g, '"').replace(/[‘’]/g, "'");
+  raw = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
+  serviceAccount = JSON.parse(raw);
 } catch (e) {
   report("error", "Setup", "FIREBASE_SERVICE_ACCOUNT is not a complete key file. Copy the whole .json file, from the first { to the last }.");
   process.exit(1);
