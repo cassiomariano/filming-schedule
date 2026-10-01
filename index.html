@@ -221,6 +221,7 @@ a.btn{text-decoration:none}
 .s-done{background:var(--st-done);color:var(--st-done-fg)}
 .s-released{background:var(--st-released);color:var(--st-released-fg)}
 .s-canceled{background:var(--st-canceled);color:var(--st-canceled-fg)}
+.s-expired{background:var(--st-canceled);color:var(--st-canceled-fg)}
 .s-declined{background:var(--st-declined);color:var(--st-declined-fg)}
 
 /* ---------- agenda ---------- */
@@ -380,6 +381,7 @@ const STATUSES = [
   {k:"confirmed", label:"Confirmed booking", short:"Confirmed"},
   {k:"done",      label:"Done / worked", short:"Done"},
   {k:"declined",  label:"Declined", short:"Declined"},
+  {k:"expired",   label:"Expired – never answered", short:"Expired"},
   {k:"released",  label:"Released", short:"Released"},
   {k:"canceled",  label:"Canceled", short:"Canceled"},
 ];
@@ -387,7 +389,7 @@ const SMAP = Object.fromEntries(STATUSES.map(s => [s.k, s]));
 /* the name to show for a call: production, else the email subject */
 function nameOf(c){ return (c.project || "").trim() || (c.emailSubject || "").trim() || "No production name – open to add"; }
 /* what each status means, in plain words, for the Upcoming cards */
-const MEANS = {pending:"New – reply needed", available:"Available – waiting to hear", confirmed:"Booked ✓", done:"Worked", declined:"Declined", released:"Released", canceled:"Canceled"};
+const MEANS = {pending:"New – reply needed", available:"Available – waiting to hear", confirmed:"Booked ✓", done:"Worked", declined:"Declined", expired:"Expired – never answered", released:"Released", canceled:"Canceled"};
 const ACTIVE = new Set(["pending","available","confirmed"]);
 const STRUCK = new Set(["declined","released","canceled"]);
 const PRIORITY = {confirmed:0, available:1, pending:2, done:3, released:4, canceled:5, declined:6};
@@ -739,7 +741,7 @@ function evHTML({c,e}){
 function renderCalls(){
   const agencies = [...new Set(callList().map(c => c.agency).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   let list = callList();
-  const groups = {review:"review", open:["pending","available","confirmed"], pending:["pending"], available:["available"], confirmed:["confirmed"], done:["done"], declined:["declined"], closed:["released","canceled"], all:null};
+  const groups = {review:"review", open:["pending","available","confirmed"], pending:["pending"], available:["available"], confirmed:["confirmed"], done:["done"], declined:["declined"], closed:["released","canceled","expired"], all:null};
   const g = groups[S.listStatus];
   if (g === "review") list = list.filter(c => c.review);
   else if (g) list = list.filter(c => g.includes(c.status));
@@ -756,7 +758,7 @@ function renderCalls(){
   else list.sort(sorters[S.sort]);
   let h = `<div class="bar">
     <input class="inp" id="q" type="search" placeholder="Search project, role, place…" value="${esc(S.q)}" style="flex:1 1 220px">
-    <select class="inp" id="statusSel" aria-label="Status">${[["open","Open (new, available, confirmed)"],["review","From email – to check"],["pending","New – reply needed"],["available","Available"],["confirmed","Confirmed"],["done","Done"],["declined","Declined"],["closed","Released / canceled"],["all","All calls"]].map(([v,l]) => `<option value="${v}"${S.listStatus===v?" selected":""}>${l}</option>`).join("")}</select>
+    <select class="inp" id="statusSel" aria-label="Status">${[["open","Open (new, available, confirmed)"],["review","From email – to check"],["pending","New – reply needed"],["available","Available"],["confirmed","Confirmed"],["done","Done"],["declined","Declined"],["closed","Released / canceled / expired"],["all","All calls"]].map(([v,l]) => `<option value="${v}"${S.listStatus===v?" selected":""}>${l}</option>`).join("")}</select>
     <select class="inp" id="agencySel" aria-label="Agency"><option value="">All agencies</option>${agencies.map(a => `<option${S.agency===a?" selected":""}>${esc(a)}</option>`).join("")}</select>
     <select class="inp" id="sortSel" aria-label="Sort">${[["next","Next date"],["received","Newest received"],["reply","Reply deadline"],["project","Project A–Z"]].map(([v,l]) => `<option value="${v}"${S.sort===v?" selected":""}>Sort: ${l}</option>`).join("")}</select>
   </div><div class="src">${list.length} of ${S.calls.size} calls</div><div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Available – waiting to hear</span><span><i class="sw s-pending"></i>New</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day to mark it done (blue) or canceled (grey)</span></div><div class="list">`;
@@ -785,7 +787,7 @@ const OUT = [
   {k:"booked",  label:"Booked / worked", st:["confirmed","done"], color:"var(--st-confirmed)"},
   {k:"yes",     label:"Accepted, not booked", st:["available","released","canceled"], color:"var(--st-available)"},
   {k:"no",      label:"Declined", st:["declined"], color:"var(--st-declined)"},
-  {k:"new",     label:"No reply yet", st:["pending"], color:"var(--faint)"},
+  {k:"new",     label:"No reply", st:["pending","expired"], color:"var(--faint)"},
 ];
 function outcome(c){ return OUT.find(o => o.st.includes(c.status)) || OUT[3]; }
 function basisDate(c){ return S.basis === "received" ? (c.received || firstDate(c)) : firstDate(c); }
@@ -797,7 +799,7 @@ function renderStats(){
   const withD = all.filter(c => basisDate(c));
   const thisWeek = withD.filter(c => basisDate(c) >= wk).length;
   const thisMonth = withD.filter(c => basisDate(c) >= mo).length;
-  const answered = all.filter(c => c.status !== "pending");
+  const answered = all.filter(c => c.status !== "pending" && c.status !== "expired");
   const yes = answered.filter(c => c.status !== "declined").length;
   const booked = all.filter(c => c.status === "confirmed" || c.status === "done").length;
   const workDays = new Set(all.flatMap(c => (c.dates||[]).filter(e => e.d.slice(0,4) === String(now.getFullYear()) && ["done","confirmed"].includes(dayStatus(c,e))).map(e => e.d))).size;

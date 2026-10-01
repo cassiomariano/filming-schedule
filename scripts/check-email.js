@@ -468,8 +468,7 @@ async function mailFolders(client) {
   return out.sort((a, b) => (b.path === "INBOX") - (a.path === "INBOX"));
 }
 
-async function checkAccount(account) {
-  const counts = { looked: 0, alreadySeen: 0, notACall: 0, added: 0, updated: 0, folders: 0 };
+async function connect(account) {
   const client = new ImapFlow({
     host: "imap.mail.yahoo.com",
     port: 993,
@@ -478,22 +477,36 @@ async function checkAccount(account) {
     logger: false,
     socketTimeout: 120000,
   });
+  client.on("error", () => {});                       // a dropped connection is handled below
   await client.connect();
-  try {
-    const folders = await mailFolders(client);
-    const all = [];                                    // re-read mode: every email, sorted by date afterwards
-    for (const folder of folders) {
-      let lock;
-      try { lock = await client.getMailboxLock(folder.path); } catch (e) { continue; }
-      counts.folders++;
-      try { await checkFolder(client, account, counts, folder, REBUILD ? all : null); } finally { lock.release(); }
+  return client;
+}
+async function checkAccount(account) {
+  const counts = { looked: 0, alreadySeen: 0, notACall: 0, added: 0, updated: 0, folders: 0, skipped: 0 };
+  let client = await connect(account);
+  const folders = await mailFolders(client);
+  const all = [];                                      // re-read mode: every email, sorted by date afterwards
+  for (const folder of folders) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        if (!client.usable) client = await connect(account);
+        const lock = await client.getMailboxLock(folder.path);
+        try { await checkFolder(client, account, counts, folder, REBUILD ? all : null); } finally { lock.release(); }
+        counts.folders++;
+        break;
+      } catch (e) {
+        if (e.authenticationFailed) throw e;
+        if (attempt === 2) counts.skipped++;
+        try { await client.logout(); } catch (_) {}
+        client = { usable: false };
+        await new Promise(r => setTimeout(r, 5000));
+      }
     }
-    if (REBUILD) {
-      all.sort((a, b) => a.date - b.date);              // oldest first: request → answer → booking → call time
-      for (const item of all) await handleMail(item, account, counts, true);
-    }
-  } finally {
-    await client.logout();
+  }
+  try { if (client.usable) await client.logout(); } catch (_) {}
+  if (REBUILD) {
+    all.sort((a, b) => a.date - b.date);                // oldest first: request → answer → booking → call time
+    for (const item of all) await handleMail(item, account, counts, true);
   }
   return counts;
 }
@@ -722,7 +735,7 @@ async function handleMail(m, account, counts, rereading) {
         await new Promise(r => setTimeout(r, 15000));   // Yahoo sometimes drops the first connection: wait and try once more
         c = await checkAccount(accounts[i]);
       }
-      report("notice", `Account ${i + 1}`, `Looked at ${c.looked} emails in ${c.folders} folders: ${c.alreadySeen} already seen, ${c.notACall} not availability checks, ${c.added} new calls added, ${c.updated} calls updated (booked/released).`);
+      report("notice", `Account ${i + 1}`, `Looked at ${c.looked} emails in ${c.folders} folders${c.skipped ? ` (${c.skipped} folders could not be opened)` : ""}: ${c.alreadySeen} already seen, ${c.notACall} not availability checks, ${c.added} new calls added, ${c.updated} calls updated (booked/released).`);
     } catch (err) {
       failed = true;
       // only the kind of error (the full message can contain the address)
@@ -731,9 +744,23 @@ async function handleMail(m, account, counts, rereading) {
       report("error", `Account ${i + 1}`, "Could not check this inbox: " + why);
     }
   }
+  if (REBUILD) {
+    existingCalls = null;
+    await loadExistingCalls();
+    const today = londonDate();
+    const old = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    for (const c of existingCalls) {
+      if (c.status !== "pending" || !String(c.source || "").startsWith("email")) continue;
+      const ds = c.dates || [];
+      if (ds.length ? ds.every(e => e.d < today) : (c.received || today) < old) {
+        await db.collection("calls").doc(c.id).update({ status: "expired", updatedAt: new Date().toISOString() });
+        stats.expired = (stats.expired || 0) + 1;
+      }
+    }
+  }
   if (REBUILD) report("notice", "Re-read everything", `Booking emails: ${stats.booked[0]} found, ${stats.booked[1]} matched to a job, ${stats.booked[2]} added as new booked jobs. ` +
     `Release emails: ${stats.released[0]} found, ${stats.released[1]} matched. Answer confirmations: ${stats.replied[0]} found, ${stats.replied[1]} matched. ` +
-    `Call times: ${stats.calltime[0]} found, ${stats.calltime[1]} matched. Requests brought back: ${stats.restored}.`);
+    `Call times: ${stats.calltime[0]} found, ${stats.calltime[1]} matched. Requests brought back: ${stats.restored}. Old requests never answered (now "Expired"): ${stats.expired || 0}.`);
   try { await refreshPendingPortalPages(); } catch (e) { report("warning", "EP pages", "Could not refresh EP pages (" + (e.code || e.name) + ")."); }
   if (portal.read + portal.failed + portal.login) {
     if (process.env.PORTAL_DEBUG) report("notice", "EP page check", `pages: ${portal.read}; with "recorded your response": ${portal.recorded}; with answer buttons: ${portal.radios}; with ticked answers: ${portal.ticked}; mostly script (built in the browser): ${portal.scripts}; with dates found: ${portal.dated}; answer shapes: ${Object.entries(shapes).map(([k, v]) => k + " " + v).join(", ") || "none"}`);
