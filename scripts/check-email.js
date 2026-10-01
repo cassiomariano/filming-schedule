@@ -25,16 +25,29 @@ const accounts = [
   { email: process.env.YAHOO_EMAIL_2, password: process.env.YAHOO_APP_PASSWORD_2 },
 ].filter(a => a.email && a.password);
 
+// "report" prints a short line that GitHub also shows as a note on the run's
+// summary page (the ::notice:: / ::error:: prefix does that). Counts only, no email content.
+function report(kind, title, text) {
+  console.log(`::${kind} title=${title}::${text}`);
+}
+
 if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-  console.error("Missing the FIREBASE_SERVICE_ACCOUNT secret. See SETUP.md step 5.");
+  report("error", "Setup", "Missing the FIREBASE_SERVICE_ACCOUNT secret. See SETUP.md step 5.");
   process.exit(1);
 }
 if (!accounts.length) {
-  console.error("No Yahoo account set. Add YAHOO_EMAIL_1 and YAHOO_APP_PASSWORD_1 secrets (SETUP.md step 6).");
+  report("error", "Setup", "No Yahoo account set. Add YAHOO_EMAIL_1 and YAHOO_APP_PASSWORD_1 secrets (SETUP.md step 6).");
   process.exit(1);
 }
 
-admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
+let serviceAccount;
+try {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+} catch (e) {
+  report("error", "Setup", "FIREBASE_SERVICE_ACCOUNT is not a complete key file. Copy the whole .json file, from the first { to the last }.");
+  process.exit(1);
+}
+admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
 // a short, stable ID for each email, so the same email is never added twice
@@ -133,15 +146,24 @@ async function checkAccount(account) {
 }
 
 (async () => {
+  // check the database first, so a database problem is reported clearly
+  try {
+    await db.collection("processed").limit(1).get();
+  } catch (err) {
+    report("error", "Database", "Can't open the Firebase database (" + (err.code || err.name) + "): " + String(err.message || "").slice(0, 200));
+    process.exit(1);
+  }
   let failed = false;
   for (let i = 0; i < accounts.length; i++) {
     try {
       const c = await checkAccount(accounts[i]);
-      console.log(`Account ${i + 1}: looked at ${c.looked} emails, ${c.alreadySeen} already seen, ${c.notACall} not availability checks, ${c.added} new calls added.`);
+      report("notice", `Account ${i + 1}`, `Looked at ${c.looked} emails: ${c.alreadySeen} already seen, ${c.notACall} not availability checks, ${c.added} new calls added.`);
     } catch (err) {
       failed = true;
-      // print the kind of error only (the message can contain the address)
-      console.error(`Account ${i + 1}: could not check this inbox (${err.authenticationFailed ? "Yahoo refused the app password" : err.code || err.name}).`);
+      // only the kind of error (the full message can contain the address)
+      const why = err.authenticationFailed ? "Yahoo refused the login - check the email and app password secrets"
+                : (err.code || err.name || "unknown error") + (err.responseText ? " - " + String(err.responseText).slice(0, 120) : "");
+      report("error", `Account ${i + 1}`, "Could not check this inbox: " + why);
     }
   }
   process.exit(failed ? 1 : 0);
