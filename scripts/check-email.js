@@ -528,6 +528,11 @@ async function checkFolder(client, account, counts, folder, collect) {
       const subj = String(env.subject || "").toLowerCase();
       const k = classifyEmail(env.subject || "", "") || "other";
       survey["all " + k] = (survey["all " + k] || 0) + 1;
+      if (k === "other" && /book|confirm|update|selected|not required|pencil|check/.test(subj)) {
+        const SAFE = new Set("a an the for on of to in at your you you're youre are is be been have has we our from and with re fw fwd booking booked book confirmed confirmation confirm update updated updates details detail info information availability available av check request new job work dates date day days tomorrow today next week call time sheet schedule shoot filming fitting costume selected not required needed final please reply urgent asap important change changes changed status thanks thank released release hold pencil pencilled extras extra sa supporting artist artists role tv film series feature commercial – - : | !".split(" "));
+        const shapeTxt = subj.replace(/[0-9]+/g, "#").split(/\s+/).map(w => SAFE.has(w.replace(/[^a-z'#–:|!-]/g, "")) || /^#/.test(w) ? w.replace(/[^a-z'#–:|!-]/g, "") : "*").join(" ").replace(/(\* )+\*/g, "*");
+        const t = "shape: " + shapeTxt; survey[t] = (survey[t] || 0) + 1;
+      }
       SURVEY_WORDS.forEach(w => { if (subj.includes(w)) { const t = `"${w}"→${k}`; survey[t] = (survey[t] || 0) + 1; } });
       continue;
     }
