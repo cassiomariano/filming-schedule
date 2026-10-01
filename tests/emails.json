@@ -294,5 +294,18 @@
   "expect": {
    "isCall": false
   }
+ },
+ {
+  "name": "Extra People release (not a new call)",
+  "email": {
+   "subject": "Thank you for being Available on Falcon - You have been RELEASED!",
+   "fromName": "ExtraPeople",
+   "fromEmail": "noreply@extrapeople.uk.epcastingportal.com",
+   "received": "2026-10-01",
+   "text": "You have been released from Falcon. Dates: 1 Oct, 7 Oct."
+  },
+  "expect": {
+   "isCall": false
+  }
  }
 ]

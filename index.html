@@ -152,10 +152,10 @@ h3.wk{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transfo
 .uprow{display:grid;grid-template-columns:64px 1fr;gap:8px;align-items:start}
 .uplab{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-top:4px}
 .updays{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
-.upday{font-size:13px;font-weight:600;border:1px solid var(--line);background:var(--surface-2);border-radius:6px;padding:2px 8px}
-.upday small{font-weight:400;color:var(--muted)}
-.upday.off{text-decoration:line-through;color:var(--faint);font-weight:400}
-.upday.past{opacity:.55}
+.upday{font:inherit;font-size:13px;font-weight:600;border:1px solid transparent;border-radius:6px;padding:2px 8px;cursor:pointer;text-align:left}
+.upday:hover{outline:2px solid var(--accent);outline-offset:1px}
+.upday small{font-weight:400;opacity:.8}
+.upday.off{text-decoration:line-through;font-weight:400}
 .upday.upclash{border-color:var(--clash);box-shadow:inset 0 0 0 1px var(--clash)}
 .upacts{display:flex;gap:6px;flex-wrap:wrap}
 .ev .k{font-family:var(--f-mono);font-size:9px;font-weight:600;opacity:.75;flex:none;letter-spacing:.03em}
@@ -203,7 +203,8 @@ h3.wk{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transfo
 .dates{display:flex;flex-wrap:wrap;gap:4px}
 .dchip{font-family:var(--f-mono);font-size:11px;border:1px solid var(--line);border-radius:4px;padding:1px 6px;white-space:nowrap;background:var(--surface-2)}
 .dchip.fit{border-style:dashed}
-.dchip.past{opacity:.5}
+.dchip{cursor:pointer;font:inherit;font-family:var(--f-mono);font-size:11px;border:1px solid transparent}
+.dchip:hover{outline:2px solid var(--accent);outline-offset:1px}
 .dchip.off{text-decoration:line-through;color:var(--faint)}
 .row .acts{display:flex;flex-direction:column;gap:6px;padding:10px 12px 10px 0;justify-content:center}
 .due{font-family:var(--f-mono);font-size:11px;font-weight:600}
@@ -383,6 +384,24 @@ function dayStatus(c, e){
   return c.status;
 }
 
+/* tap a day: booked → worked (blue) → canceled (grey) → released (grey) → booked */
+const CYCLE = ["", "worked", "canceled", "released"];
+const CYCLE_WORDS = {"": "as the call", worked: "worked", canceled: "canceled", released: "released"};
+async function cycleDay(id, i){
+  const c = S.calls.get(id); if (!c || !c.dates || !c.dates[i]) return;
+  const dates = c.dates.map(e => ({...e}));
+  const e = dates[i];
+  const now = e.state || (e.done ? "worked" : "");
+  const next = CYCLE[(CYCLE.indexOf(now) + 1) % CYCLE.length];
+  delete e.done;
+  if (next) e.state = next; else delete e.state;
+  try {
+    await S.db.collection("calls").doc(id).update({dates, updatedAt: new Date().toISOString()});
+    toast(`${nameOf(c)} · ${fmtShort(e.d)}: ${CYCLE_WORDS[next]}`);
+  } catch (err) { writeFailed(err); }
+}
+const DAY_TIP = "Tap to change this day: booked → worked → canceled → released";
+
 /* entries per day for the calendar */
 function dayIndex(){
   const m = new Map();
@@ -501,23 +520,20 @@ function upcomingHTML(cl){
     .filter(c => active.includes(c.status) && (c.dates||[]).some(e => e.d >= TODAY))
     .sort((a,b) => nextDate(a).localeCompare(nextDate(b)));
   const undated = callList().filter(c => active.includes(c.status) && !(c.dates||[]).length);
-  let h = `<div class="bar"><h2 class="month-title" style="margin:0">Upcoming</h2><span class="src">${jobs.length} jobs with dates ahead · booked first in each week</span><span style="flex:1"></span>
+  let h = `<div class="bar"><h2 class="month-title" style="margin:0">Upcoming</h2><span class="src">${jobs.length} jobs with dates ahead</span><span style="flex:1"></span>
     <div class="seg" role="group" aria-label="Calendar view"><button data-calview="upcoming" aria-pressed="true">Upcoming</button><button data-calview="month" aria-pressed="false">Month</button><button data-calview="agenda" aria-pressed="false">Agenda</button></div></div>`;
   if (!jobs.length) h += `<div class="empty"><h2>Nothing coming up</h2><p>New availability checks appear here as soon as they arrive.</p></div>`;
-  // group by the week of the next date
-  const thisWeek = key(weekStart(new Date()));
-  const nextWeekD = weekStart(new Date()); nextWeekD.setDate(nextWeekD.getDate()+7);
-  const nextWeek = key(nextWeekD);
-  let lastWeek = null;
-  const order = {confirmed:0, pending:1, available:2};
-  const groups = {};
-  for (const c of jobs){ const w = key(weekStart(parse(nextDate(c)))); (groups[w] = groups[w] || []).push(c); }
-  for (const w of Object.keys(groups).sort()){
-    const label = w === thisWeek ? "This week" : w === nextWeek ? "Next week" : "Week of " + fmtShort(w);
-    h += `<h3 class="wk">${label}</h3><div class="ups">`;
-    groups[w].sort((a,b) => order[a.status]-order[b.status] || nextDate(a).localeCompare(nextDate(b)));
-    for (const c of groups[w]) h += upCard(c, cl);
-    h += `</div>`;
+  // Booked jobs first (green), then "said available, waiting to hear" (yellow), then new ones
+  const sections = [
+    ["confirmed", "Booked – your next jobs", "Production has booked you."],
+    ["available", "Waiting to hear", "You said you're available; production hasn't confirmed yet."],
+    ["pending", "New – reply needed", "Accept or decline these."],
+  ];
+  h += `<div class="keyrow" style="margin-top:-4px"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Waiting to hear</span><span><i class="sw s-done"></i>Worked</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day to change it</span></div>`;
+  for (const [st, title, sub] of sections){
+    const list = jobs.filter(c => c.status === st);
+    if (!list.length) continue;
+    h += `<h3 class="wk">${title} · ${list.length}</h3><p class="src" style="margin:-6px 0 0">${sub}</p><div class="ups">${list.map(c => upCard(c, cl)).join("")}</div>`;
   }
   if (undated.length) h += `<h3 class="wk">No dates yet</h3><div class="ups">${undated.map(c => upCard(c, cl)).join("")}</div>`;
   return h;
@@ -530,7 +546,7 @@ function upCard(c, cl){
     return `<div class="uprow"><span class="uplab">${kind==="fit"?"Fitting":"Shoot"}</span><span class="updays">${list.map(e => {
       const st = dayStatus(c,e); const off = st==="released"||st==="canceled";
       const where = e.loc || (kind==="fit" ? c.fitLocation : c.filmLocation) || "";
-      return `<span class="upday${off?" off":""}${e.d<TODAY?" past":""}${cl.has(e.d)&&!off?" upclash":""}" title="${esc(SMAP[st]?.label||"")}${cl.has(e.d)?" · clash with another call":""}">${fmtShort(e.d)}${e.night?" ☾":""}${where?` <small>@ ${esc(where)}</small>`:""}${off?` <small>(${st})</small>`:""}${st==="done"?" ✓":""}</span>`;
+      return `<button type="button" class="upday ${clsS(st)}${off?" off":""}${cl.has(e.d)&&!off?" upclash":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${esc(SMAP[st]?.label||"")}${cl.has(e.d)?" · clash with another call":""} · ${DAY_TIP}">${fmtShort(e.d)}${e.night?" ☾":""}${where?` <small>@ ${esc(where)}</small>`:""}${off?` <small>(${st})</small>`:""}${st==="done"?" ✓ worked":""}</button>`;
     }).join("")}</span></div>`;
   };
   const du = c.status === "pending" ? dueText(c.respondBy) : null;
@@ -569,7 +585,8 @@ function renderCalls(){
     reply: (a,b) => (a.respondBy||"9999").localeCompare(b.respondBy||"9999"),
     project: (a,b) => (a.project||"").localeCompare(b.project||""),
   };
-  if (S.listStatus === "open" || S.listStatus === "pending") list.sort((a,b) => (a.status==="pending"?0:1)-(b.status==="pending"?0:1) || sorters[S.sort](a,b));
+  const rank = {confirmed:0, available:1, pending:2};
+  if (S.listStatus === "open") list.sort((a,b) => (rank[a.status]??3)-(rank[b.status]??3) || sorters[S.sort](a,b));
   else list.sort(sorters[S.sort]);
   let h = `<div class="bar">
     <input class="inp" id="q" type="search" placeholder="Search project, role, place…" value="${esc(S.q)}" style="flex:1 1 220px">
@@ -586,7 +603,7 @@ function renderCalls(){
       <div class="body" data-open="${c.id}" role="button" tabindex="0">
         <div class="line1"><span class="proj">${esc(nameOf(c))}</span><span class="pill ${clsS(c.status)}">${SMAP[c.status]?.short||c.status}</span>${c.attention?`<span class="flag">● Attention</span>`:""}</div>
         <div class="meta">${c.agency?`<span><b>${esc(c.agency)}</b></span>`:""}${c.role?`<span>${esc(c.role)}</span>`:""}${(c.location||c.filmLocation)?`<span>📍 ${esc(c.location||c.filmLocation)}</span>`:""}${c.received?`<span>Received ${fmtDM(c.received)}</span>`:""}</div>
-        ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"; return `<span class="dchip ${e.kind}${e.d<TODAY?" past":""}${off?" off":""}" title="${e.kind==="fit"?"Fitting":"Shoot"}${st!==c.status?" · "+SMAP[st].short:""}">${e.kind==="fit"?"F ":""}${fmtDM(e.d)}${e.night?" ☾":""}${st==="done"&&c.status!=="done"?" ✓":""}</span>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
+        ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"; return `<button type="button" class="dchip ${clsS(st)} ${e.kind}${off?" off":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${e.kind==="fit"?"Fitting":"Shoot"} · ${SMAP[st].short} · ${DAY_TIP}">${e.kind==="fit"?"F ":""}${fmtDM(e.d)}${e.night?" ☾":""}${st==="done"?" ✓":""}</button>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
         ${du?`<span class="due${du.late?" late":""}">${esc(du.txt)}</span>`:""}
       </div>
       <div class="acts">${c.status==="pending"
@@ -878,6 +895,7 @@ document.addEventListener("click", e => {
   const ds = t.dataset;
   if (ds.tab){ S.tab = ds.tab; save("tab", S.tab); render(); scrollTo(0,0); return; }
   if ("close" in ds){ closeSheet(); return; }
+  if (ds.cycle){ const [id, i] = ds.cycle.split("|"); cycleDay(id, +i); return; }
   if (ds.open && !ds.set){ openEditor(ds.open); return; }
   if (ds.day){
     S.cursor = monthStart(parse(ds.day)); S.calView = "agenda"; S.tab = "calendar"; save("calView2","agenda"); render();

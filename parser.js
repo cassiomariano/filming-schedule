@@ -135,9 +135,10 @@
   //   null       anything else             -> ignored
   function classifyEmail(subject, text) {
     var subj = subject || "";
-    if (/thank|review|invit|newsletter|survey|payment|invoice/i.test(subj)) return null;
-    if (/booking confirm|confirmed booking|you('| a)re booked|you have been booked|booked for|booking:\s|is confirmed/i.test(subj)) return "booked";
+    // releases and bookings first: they often start with "Thank you for being available..."
     if (/\breleased?\b|cancel+ed|cancellation|no longer (needed|required)|stood down/i.test(subj)) return "released";
+    if (/booking confirm|confirmed booking|you('| a)re booked|you have been booked|booked (for|on)|booking:\s|is confirmed/i.test(subj)) return "booked";
+    if (/thank|review|invit|newsletter|survey|payment|invoice/i.test(subj)) return null;
     return isAvailabilityCheck(subj, text) ? "call" : null;
   }
 
@@ -174,6 +175,11 @@
   function projectFromSubject(subject) {
     var s = subject || "", m;
     if ((m = s.match(/availability request\s*\(\s*([^)]+?)\s*\)/i))) return m[1];
+    // "Thank you for being Available on Falcon - You have been RELEASED!"
+    if ((m = s.match(/\bavailable (?:on|for)\s+(.+?)\s*(?:[-–!|:]|$)/i))) return m[1];
+    if ((m = s.match(/\breleased (?:from|on)\s+(.+?)\s*(?:[-–!|:]|$)/i))) return m[1];
+    if ((m = s.match(/\bbooked (?:on|for)\s+(.+?)\s*(?:[-–!|:]|$)/i))) return m[1];
+    if ((m = s.match(/booking confirm\w*\s*[-–:]\s*([^-–|]+)/i))) return m[1];
     if ((m = s.match(/AV Check\s*-\s*([^-]+)/i))) return m[1];
     if ((m = s.match(/Availability Check\s*-\s*([^-]+)/i))) return m[1];
     if ((m = s.match(/option with\s+(.+?)\s+-\s+/i))) return m[1];

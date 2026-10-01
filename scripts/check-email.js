@@ -144,6 +144,26 @@ async function notifyPhone(call) {
   }
 }
 
+// Booking confirmation / release email: find the ONE matching open call (same production,
+// same agency) and mark it Confirmed or Released. Returns the call's id, or null if no single match.
+async function applyStatusEmail(kind, r, subject, received, skipId) {
+  await loadExistingCalls();
+  const matches = existingCalls.filter(c => c.id && c.id !== skipId && c.project && r.project && sameProject(c.project, r.project) &&
+                                             (!r.agency || sameName(c.agency, r.agency)) &&
+                                             ["pending", "available", "confirmed"].includes(c.status));
+  if (matches.length !== 1) return null;
+  const c = matches[0];
+  const status = kind === "booked" ? "confirmed" : "released";
+  const note = (kind === "booked" ? "Booked" : "Released") + " by email on " + received + ": " + String(subject).slice(0, 120);
+  await db.collection("calls").doc(c.id).update({
+    status: status, updatedAt: new Date().toISOString(),
+    notes: (c.notes ? c.notes + " • " : "") + note,
+  });
+  c.status = status;
+  await notifyPhone({ ...c, project: (kind === "booked" ? "BOOKED: " : "Released: ") + c.project });
+  return c.id;
+}
+
 async function checkAccount(account) {
   const counts = { looked: 0, alreadySeen: 0, notACall: 0, added: 0, updated: 0 };
   const client = new ImapFlow({
@@ -199,24 +219,8 @@ async function checkAccount(account) {
 
       // A booking confirmation or a release: update the matching call, never add a new one
       if (kind === "booked" || kind === "released") {
-        await loadExistingCalls();
-        const matches = existingCalls.filter(c => c.id && c.project && r.project && sameProject(c.project, r.project) &&
-                                                   (!r.agency || sameName(c.agency, r.agency)) &&
-                                                   ["pending", "available", "confirmed"].includes(c.status));
-        let callId = null;
-        if (matches.length === 1) {
-          const c = matches[0];
-          const status = kind === "booked" ? "confirmed" : "released";
-          const note = (kind === "booked" ? "Booked" : "Released") + " by email on " + received + ": " + subject.slice(0, 120);
-          await db.collection("calls").doc(c.id).update({
-            status: status, updatedAt: new Date().toISOString(),
-            notes: (c.notes ? c.notes + " • " : "") + note,
-          });
-          c.status = status;
-          callId = c.id;
-          counts.updated++;
-          await notifyPhone({ ...c, project: (kind === "booked" ? "BOOKED: " : "Released: ") + c.project });
-        }
+        const callId = await applyStatusEmail(kind, r, subject, received, null);
+        if (callId) counts.updated++;
         await seenRef.set({ at: new Date().toISOString(), call: callId });
         continue;
       }
@@ -284,11 +288,20 @@ async function checkAccount(account) {
   if (process.env.CLEANUP === "true") {
     const snap = await db.collection("calls").get();
     let removed = 0;
-    let flagged = 0;
+    let flagged = 0, repaired = 0;
     for (const doc of snap.docs) {
       const c = doc.data();
       if (!String(c.source || "").startsWith("email")) continue;          // never touch your own entries
       const m = String(c.emailFrom || "").match(/^(.*?)\s*<([^>]*)>/) || [];
+      // made from a booking or release email by mistake: apply it to the real call, then remove it
+      const kind = classifyEmail(c.emailSubject, c.rawEmail);
+      if (kind === "booked" || kind === "released") {
+        const r = parseEmail({ subject: c.emailSubject, fromName: m[1], fromEmail: m[2], text: c.rawEmail || "", received: c.received });
+        const matched = await applyStatusEmail(kind, r, c.emailSubject, c.received, doc.id);
+        await doc.ref.delete();
+        if (matched) repaired++; else removed++;
+        continue;
+      }
       const ok = isFromCastingAgency(m[1], m[2], knownAgencies) && isAvailabilityCheck(c.emailSubject, c.rawEmail);
       if (ok) continue;
       if (["confirmed", "done"].includes(c.status)) {
@@ -302,7 +315,7 @@ async function checkAccount(account) {
     }
     existingCalls = null;
     await loadExistingCalls();
-    report("notice", "Clean-up", `Removed ${removed} emails that were not availability checks; ${flagged} marked "check details" because you had booked them.`);
+    report("notice", "Clean-up", `Removed ${removed} emails that were not availability checks; ${repaired} booking/release emails applied to their calls; ${flagged} marked "check details" because you had booked them.`);
   }
 
   let failed = false;
