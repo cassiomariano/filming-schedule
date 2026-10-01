@@ -37,7 +37,9 @@ on:
         default: false
 
 concurrency:
-  group: check-email             # never run two checks at the same time
+  # never run two checks at the same time; a "re-read everything" run has its own lane,
+  # so the 5-minute checks can't push it out of the queue
+  group: check-email-${{ github.event.inputs.rebuild == 'true' && 'rebuild' || 'normal' }}
 
 jobs:
   check:
