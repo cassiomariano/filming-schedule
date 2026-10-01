@@ -162,7 +162,14 @@ async function checkAccount(account) {
   let failed = false;
   for (let i = 0; i < accounts.length; i++) {
     try {
-      const c = await checkAccount(accounts[i]);
+      let c;
+      try {
+        c = await checkAccount(accounts[i]);
+      } catch (first) {
+        if (first.authenticationFailed) throw first;
+        await new Promise(r => setTimeout(r, 15000));   // Yahoo sometimes drops the first connection: wait and try once more
+        c = await checkAccount(accounts[i]);
+      }
       report("notice", `Account ${i + 1}`, `Looked at ${c.looked} emails: ${c.alreadySeen} already seen, ${c.notACall} not availability checks, ${c.added} new calls added.`);
     } catch (err) {
       failed = true;
