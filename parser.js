@@ -136,7 +136,7 @@
   }
 
   // ---------- call times ----------
-  var CALL_TIME_SUBJECT = /call ?time|call ?sheet|callsheet|unit call|your call\b|call details|tomorrow'?s call|call for (mon|tue|wed|thu|fri|sat|sun)/i;
+  var CALL_TIME_SUBJECT = /call ?time|call ?sheet|callsheet|unit call|your call\b|call details|tomorrow'?s call|call for (mon|tue|wed|thu|fri|sat|sun)|filming tomorrow|costume information|filming update|update\s*[-–:]\s*(filming|film|costume)/i;
 
   // Reads "Call time: 06:30" / "CALL 0630" / "call 6.30am" and the meeting place.
   // Returns {time: "06:30", place: "...", dates: [...]} (time "" when not found).
@@ -220,9 +220,10 @@
   function classifyEmail(subject, text) {
     var subj = subject || "";
     // releases and bookings first: they often start with "Thank you for being available..."
-    if (/\breleased?\b|cancel+ed|cancellation|no longer (needed|required)|stood down/i.test(subj)) return "released";
+    if (/you have (new )?booking updates?/i.test(subj)) return "epupdate";        // EP: "You have booking updates on …"
+    if (/\breleased?\b|cancel+ed|cancellation|no longer (needed|required)|not (required|selected|needed)|unsuccessful|stood down/i.test(subj)) return "released";
     if (CALL_TIME_SUBJECT.test(subj)) return "calltime";
-    if (/booking confirm|confirmed booking|you('| a)re booked|you have been booked|booked (for|on)|booking:\s|is confirmed/i.test(subj)) return "booked";
+    if (/booking confirm|confirmed booking|you('| a)re booked|you have been booked|booked (for|on)|booking:\s|is confirmed|^\W*booked\b|^\W*booking\s*[-–:]|booking details|confirmed (fitting|day|date|dates|for)|confirm(ation of)? your dates|^\W*confirmation\b/i.test(subj)) return "booked";
     // the agency confirming YOUR reply ("Thank you for letting us know that you are available")
     if (/thank you for (letting us know|responding|your (response|reply)|being (un)?available|confirming)/i.test(subj)) return "replied";
     if (/thank|review|invit|newsletter|survey|payment|invoice/i.test(subj)) return null;

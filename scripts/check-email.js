@@ -26,6 +26,7 @@ const REBUILD = process.env.REBUILD === "true";
 const SURVEY = process.env.SURVEY === "true";
 const survey = {};
 const SURVEY_WORDS = ["book", "confirm", "selected", "pencil", "hold", "call sheet", "call time", "callsheet", "schedule", "details", "final", "release", "cancel", "stood down", "not required", "unfortunately", "update", "change", "reminder", "fitting", "wardrobe", "costume", "travel", "tomorrow", "pay", "re:", "availability", "av ", "check", "request"];
+const epu = { found: 0, opened: 0, login: 0, booked: 0, released: 0, unclear: 0, matched: 0 };
 const stats = { booked: [0, 0, 0], released: [0, 0], replied: [0, 0], calltime: [0, 0], restored: 0, folders: 0 };
 const accounts = [
   { email: process.env.YAHOO_EMAIL_1, password: process.env.YAHOO_APP_PASSWORD_1 },
@@ -194,6 +195,14 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
   }
   const c = matches[0];
   if (kind === "released" && c.status === "released") return c.id;
+  // "Not required for filming on 3rd Oct": only those days are released when the job has other days
+  if (kind === "released" && listed.size && (c.dates || []).some(e => !listed.has(e.d))) {
+    const dates = c.dates.map(e => ({ ...e }));
+    let hit = false;
+    dates.forEach(e => { if (listed.has(e.d) && e.state !== "released") { e.state = "released"; hit = true; } });
+    if (hit) { await db.collection("calls").doc(c.id).update({ dates, updatedAt: new Date().toISOString() }); c.dates = dates; }
+    return c.id;
+  }
   const status = kind === "booked" ? "confirmed" : "released";
   const note = (kind === "booked" ? "Booked" : "Released") + " by email on " + received + ": " + String(subject).slice(0, 120);
   const changes = { status: status, updatedAt: new Date().toISOString() };
@@ -253,8 +262,9 @@ async function applyCallTime(r, ct, subject) {
   let entry = dates.find(e => e.d === d && e.kind === "film") || dates.find(e => e.d === d);
   if (!entry) { entry = { d: d, kind: "film" }; dates.push(entry); dates.sort((a, b) => a.d.localeCompare(b.d)); }
   entry.callTime = ct.time;
+  if (c.status === "available") { c.status = "confirmed"; }   // a call time means you're booked
   if (ct.place) entry.callPlace = ct.place.slice(0, 120);
-  await db.collection("calls").doc(c.id).update({ dates: dates, updatedAt: new Date().toISOString() });
+  await db.collection("calls").doc(c.id).update({ dates: dates, status: c.status, updatedAt: new Date().toISOString() });
   c.dates = dates;
   const t = new Date(d + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
   await notifyPhone({ ...c, project: "Call time: " + c.project, role: t + " — call " + ct.time + (ct.place ? " @ " + ct.place : ""), dates: [] , location: ct.place || c.location });
@@ -599,6 +609,34 @@ async function handleMail(m, account, counts, rereading) {
   const r = parseEmail({ subject, fromName: from.name, fromEmail: from.address, text, received });
   const remember = id => seenRef.set({ at: new Date().toISOString(), call: id || (m.seen && m.seen.call) || null, kind });
 
+  // EP "You have booking updates": open the EP page it links to and see what changed
+  if (kind === "epupdate") {
+    epu.found++;
+    const links = extractLinks(html).concat(allUrls(html));
+    const url = portalLink({ links });
+    let callId = null;
+    if (url) {
+      const before = portal.login;
+      const page = await fetchPortalPage(url);
+      if (portal.login > before) epu.login++;
+      if (page) {
+        epu.opened++;
+        const ptext = htmlToText(page);
+        const r2 = parseEmail({ subject: "", fromName: from.name, fromEmail: from.address, html: page, text: "", received });
+        if (!r2.agency) r2.agency = r.agency;
+        const k2 = /\breleased?\b|not (required|selected|needed)|stood down|cancel+ed/i.test(ptext) ? "released"
+                 : /\bbooked\b|booking confirm|confirmed/i.test(ptext) ? "booked" : null;
+        if (k2) {
+          epu[k2]++;
+          callId = await applyStatusEmail(k2, r2, subject, received, null, links, m.trash ? null : { ...m, key, html: page, text: ptext });
+          if (callId) { epu.matched++; counts.updated++; }
+        } else epu.unclear++;
+      }
+    }
+    await remember(callId);
+    return;
+  }
+
   // Call time / call sheet: add the time and place to that day of your booked job
   if (kind === "calltime") {
     stats.calltime[0]++;
@@ -779,6 +817,7 @@ async function handleMail(m, account, counts, rereading) {
       }
     }
   }
+  if (epu.found) report("notice", "EP booking updates", `${epu.found} emails; page opened ${epu.opened}, needed a login ${epu.login}; said booked ${epu.booked}, released ${epu.released}, unclear ${epu.unclear}; matched to a job ${epu.matched}.`);
   if (REBUILD) report("notice", "Re-read everything", `Booking emails: ${stats.booked[0]} found, ${stats.booked[1]} matched to a job, ${stats.booked[2]} added as new booked jobs. ` +
     `Release emails: ${stats.released[0]} found, ${stats.released[1]} matched. Answer confirmations: ${stats.replied[0]} found, ${stats.replied[1]} matched. ` +
     `Call times: ${stats.calltime[0]} found, ${stats.calltime[1]} matched. Requests brought back: ${stats.restored}. Old requests never answered (now "Expired"): ${stats.expired || 0}.`);
