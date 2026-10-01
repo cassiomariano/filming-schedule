@@ -1,0 +1,110 @@
+# Setting up your Filming Schedule
+
+This takes about 30 minutes, once. You need:
+
+- this GitHub repository
+- a Google account (for Firebase)
+- your two Yahoo accounts
+
+Everything used here is free.
+
+| Part | What it does |
+|---|---|
+| **GitHub Pages** | Hosts the app at `https://cassiomariano.github.io/filming-schedule/` |
+| **Firebase** | Your private database. It keeps your PC and phone in sync, and only you can open it. |
+| **GitHub Actions** | The "robot" that checks your Yahoo inboxes every 30 minutes and adds new availability checks |
+
+---
+
+## 1. Create the Firebase project
+
+1. Go to **https://console.firebase.google.com** and sign in with a Google account.
+2. Click **Create a project**. Call it `filming-schedule`, then click Continue.
+3. Google Analytics is not needed: switch it **off**, then click **Create project**.
+
+## 2. Connect the app to Firebase
+
+1. On the project home page, click the **`</>`** (Web) icon.
+2. App nickname: `Filming Schedule`. Leave "Firebase Hosting" unticked. Click **Register app**.
+3. Firebase shows a block of code containing `const firebaseConfig = { apiKey: ... }`. Copy the part from `{` to `}`.
+4. In this GitHub repository:
+   - open **`firebase-config.js`** and click the ✏️ pencil
+   - replace everything between `window.FIREBASE_CONFIG =` and the final `;` with what you copied
+   - click **Commit changes**
+
+   You can also just paste the block to Claude and ask it to do this step.
+
+## 3. Turn on sign-in
+
+1. In Firebase, open **Build → Authentication → Get started**.
+2. Under **Sign-in method**, choose **Email/Password**, switch it **on**, and click **Save**.
+3. Open the **Users** tab and click **Add user**. Enter your email and a password. This is the login for the app.
+4. Open the **Settings** tab, then **Authorized domains**, then **Add domain**. Enter `cassiomariano.github.io`.
+
+## 4. Create the database
+
+1. Open **Build → Firestore Database → Create database**.
+2. Location: **europe-west2 (London)**. Click Next.
+3. Choose **Start in production mode**, then click **Create**.
+4. Open the **Rules** tab. Delete what's there and paste the contents of **`firestore.rules`** from this repository.
+5. Change `YOUR_EMAIL@example.com` to the email you used in step 3, then click **Publish**.
+
+## 5. Give the robot a key to the database
+
+1. In Firebase, click the ⚙️ gear, then **Project settings → Service accounts**.
+2. Click **Generate new private key**, then **Generate key**. A `.json` file downloads.
+3. Open that file with a text editor (TextEdit or Notepad) and copy **everything** in it.
+4. In GitHub, open this repository's **Settings → Secrets and variables → Actions → New repository secret**:
+   - Name: `FIREBASE_SERVICE_ACCOUNT`
+   - Secret: paste the whole file
+   - Click **Add secret**
+5. Delete the downloaded `.json` file from your computer. It's a master key.
+
+## 6. Let the robot read your Yahoo inboxes
+
+Yahoo needs a separate **app password** for this. Your normal password is never used.
+
+For **each** Yahoo account:
+
+1. Sign in at **https://login.yahoo.com/account/security**.
+2. Click **Generate app password** (it may be under "App passwords" or "Other ways to sign in"). If you don't see it, turn on **2-step verification** first.
+3. Name it `Filming schedule` and click **Generate**. Copy the password Yahoo shows you.
+
+Then add these GitHub secrets, the same way as in step 5:
+
+| Name | Value |
+|---|---|
+| `YAHOO_EMAIL_1` | your first Yahoo address |
+| `YAHOO_APP_PASSWORD_1` | its app password |
+| `YAHOO_EMAIL_2` | your second Yahoo address (the .com.br one) |
+| `YAHOO_APP_PASSWORD_2` | its app password |
+
+The robot only **reads** emails. It never deletes them, moves them or marks them as read. To stop it at any time, delete the app password in Yahoo.
+
+## 7. Publish the app
+
+1. In GitHub, open **Settings → Pages**.
+2. Under **Build and deployment**: Source **Deploy from a branch**, Branch **main**, folder **/ (root)**. Click **Save**.
+3. After a minute or two, your app is live at **https://cassiomariano.github.io/filming-schedule/**.
+
+## 8. First run
+
+1. Open the app and sign in with the email and password from step 3.
+2. Click **Backup → Restore or import a backup** and choose `filming-schedule-backup.json`. That's your spreadsheet history, which Claude sent you.
+3. In GitHub, open the **Actions** tab. If asked, click **"I understand my workflows, go ahead and enable them"**.
+4. Click **Check email → Run workflow**, type `14` for "How many days of email", and click **Run workflow**. After about a minute, new calls from the last two weeks appear in the app.
+
+## 9. Put it on your phone
+
+- **iPhone:** open the app in Safari, tap **Share → Add to Home Screen**.
+- **Android:** open it in Chrome, tap **⋮ → Add to Home screen**.
+
+---
+
+## Good to know
+
+- **Calls added from email** start as **New** and appear under **"From your email · check details"** when something was missing. Missing items might be the production name or dates, which happens with "view ASAP" emails whose details are only behind the agency's Respond link. They also appear there when it looks like a call you already have. Open the call, fix the details using the original email shown at the bottom, and save.
+- **If the robot stops:** GitHub pauses scheduled robots in repositories with no activity for 60 days. You'll get an email; open **Actions → Check email → Enable workflow**.
+- **Teaching it a new agency format:** the rules live in `parser.js`. Copies of real emails for testing live in `tests/emails.json`. Run `npm test` to check them.
+- **Costs:** Firebase's free plan and GitHub Actions for public repositories are both free at this size.
+- **Privacy:** the code is public, but your calls are not. They live in your Firebase database, which only your login can open. The robot's logs show only counts, never email contents.
