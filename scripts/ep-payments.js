@@ -13,7 +13,20 @@ const { chromium } = require("playwright");
 const { seal } = require("./vault.js");
 
 const PORTAL = "https://uk.epcastingportal.com";
+let LOGIN = null;
 function report(kind, title, text) { console.log(`::${kind} title=${title}::${text}`); }
+
+// Your EP login, from whichever secret names you used. Only the NAMES are reported, never the values.
+function login() {
+  const names = ["EP_EMAIL", "EP_PASSWORD", "EP_EMAIL_1", "EP_EMAIL_2", "EP_PASSWORD_1", "EP_PASSWORD_2", "ET_EMAIL_1", "ET_EMAIL_2"];
+  const set = names.filter(n => (process.env[n] || "").trim());
+  report("notice", "EP secrets found", set.length ? set.join(", ") : "none");
+  const vals = set.map(n => ({ n, v: process.env[n].trim() }));
+  const email = vals.find(x => /EMAIL/.test(x.n) && x.v.includes("@"));
+  const pass = vals.find(x => /PASSWORD/.test(x.n) && x !== email) || vals.find(x => x !== email && !x.v.includes("@"));
+  if (email && pass) report("notice", "EP login", `email from ${email.n}, password from ${pass.n}`);
+  return email && pass ? { email: email.v, password: pass.v } : null;
+}
 
 // what the sign-in page looks like (field types and button words only, nothing personal)
 async function describeForm(page) {
@@ -43,14 +56,14 @@ async function signIn(page) {
   const submit = () => page.locator("button[type=submit]:visible, input[type=submit]:visible, button:has-text('Sign On'):visible, button:has-text('Sign In'):visible, button:has-text('Log In'):visible, button:has-text('Next'):visible, button:has-text('Continue'):visible, a:has-text('Sign On'):visible").first();
 
   if (!(await user.count())) { report("error", "EP sign-in", "Couldn't find the email box on the sign-in page."); return false; }
-  await user.fill(process.env.EP_EMAIL);
+  await user.fill(LOGIN.email);
   if (!(await pass().count())) {                       // email first, password on the next screen
     await submit().click();
     await page.waitForTimeout(3000);
     report("notice", "EP sign-in page (step 2)", await describeForm(page));
   }
   if (!(await pass().count())) { report("error", "EP sign-in", "Couldn't find the password box."); return false; }
-  await pass().fill(process.env.EP_PASSWORD);
+  await pass().fill(LOGIN.password);
   await submit().click();
   try { await page.waitForURL(u => String(u).startsWith(PORTAL), { timeout: 45000 }); }
   catch (e) {
@@ -61,24 +74,43 @@ async function signIn(page) {
 }
 
 (async () => {
-  if (!process.env.EP_EMAIL || !process.env.EP_PASSWORD) {
-    report("error", "EP", "Add the EP_EMAIL and EP_PASSWORD secrets first (SETUP.md, 'EP payments').");
+  LOGIN = login();
+  if (!LOGIN) {
+    report("error", "EP", "Need two secrets: your EP email and your EP password (SETUP.md, 'EP portal').");
     process.exit(1);
   }
   const browser = await chromium.launch();
   const page = await browser.newPage({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36" });
   try {
     if (!(await signIn(page))) process.exit(1);
-    // the payments list, then each payment's own page
-    await page.goto(PORTAL + "/my/payments", { waitUntil: "networkidle", timeout: 60000 });
-    const pages = [{ url: page.url(), html: await page.content(), text: await page.innerText("body") }];
-    const links = [...new Set(await page.$$eval("a[href*='/my/payments/']", as => as.map(a => a.href)))];
-    for (const url of links.slice(0, 200)) {
-      if (!url.startsWith(PORTAL + "/my/payments/")) continue;   // never leave the payments pages
-      await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
-      pages.push({ url, html: await page.content(), text: await page.innerText("body") });
+    // Every section in the menu, read-only: open the page, never press a button or send a form.
+    const SECTIONS = ["/my/dashboard", "/my/diary", "/my/payments", "/my/schedule", "/my/contracts", "/my/job-review", "/my/inbox", "/my/profiles"];
+    const pages = [];
+    const seen = new Set();
+    const read = async url => {
+      if (seen.has(url) || !url.startsWith(PORTAL + "/my/") || /logout|sign-?out|delete|remove|edit|respond|reply|accept|decline/i.test(url)) return null;
+      seen.add(url);
+      try {
+        await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
+        const p = { url: page.url(), html: await page.content(), text: await page.innerText("body") };
+        pages.push(p);
+        return p;
+      } catch (e) { return null; }
+    };
+    // the menu itself tells us the real addresses
+    const menu = [...new Set(await page.$$eval("nav a[href], header a[href]", as => as.map(a => a.href)))].filter(u => u.startsWith(PORTAL + "/my"));
+    const sections = [...new Set([...menu, ...SECTIONS.map(x => PORTAL + x)])];
+    const counts = {};
+    for (const url of sections) {
+      const p = await read(url);
+      if (!p) continue;
+      // one level deeper: each payment, contract and inbox message (up to 120 each)
+      const sub = [...new Set(await page.$$eval("a[href]", as => as.map(a => a.href)))]
+        .filter(u => u.startsWith(url.replace(/\/$/, "") + "/") && u !== url);
+      for (const u of sub.slice(0, 120)) await read(u);
+      counts[new URL(url).pathname] = 1 + sub.slice(0, 120).length;
     }
-    report("notice", "EP payments", `Signed in. Read the payments list and ${pages.length - 1} payment pages.`);
+    report("notice", "EP portal", `Signed in. Pages read: ${Object.entries(counts).map(([k, v]) => k + " " + v).join(", ")}.`);
     if (process.env.EP_EXPORT === "true") {
       const box = seal(fs.readFileSync(__dirname + "/export-key.pem", "utf8"), { at: new Date().toISOString(), pages });
       fs.writeFileSync("export.sealed.json", JSON.stringify(box));

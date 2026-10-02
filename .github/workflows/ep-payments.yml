@@ -1,6 +1,6 @@
 # Signs in to your EP portal and reads your Payments pages (see scripts/ep-payments.js).
 # Run it by hand: Actions → "EP payments" → Run workflow.
-name: EP payments
+name: EP portal
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ concurrency:
 jobs:
   payments:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: write             # only used to put a sealed export on the "vault" branch
     steps:
@@ -31,6 +31,12 @@ jobs:
         env:
           EP_EMAIL: ${{ secrets.EP_EMAIL }}
           EP_PASSWORD: ${{ secrets.EP_PASSWORD }}
+          EP_EMAIL_1: ${{ secrets.EP_EMAIL_1 }}
+          EP_EMAIL_2: ${{ secrets.EP_EMAIL_2 }}
+          EP_PASSWORD_1: ${{ secrets.EP_PASSWORD_1 }}
+          EP_PASSWORD_2: ${{ secrets.EP_PASSWORD_2 }}
+          ET_EMAIL_1: ${{ secrets.ET_EMAIL_1 }}
+          ET_EMAIL_2: ${{ secrets.ET_EMAIL_2 }}
           EP_EXPORT: ${{ github.event.inputs.export || 'true' }}
       - name: Put the sealed export on the vault branch
         if: ${{ github.event.inputs.export != 'false' && hashFiles('export.sealed.json') != '' }}
