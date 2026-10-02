@@ -85,6 +85,8 @@
   function monthNumber(word) { return MONTHS[word.slice(0, 3).toLowerCase()]; }
   function clean(s) { return String(s || "").replace(/\s+/g, " ").replace(/^[\s:|\-–—@*]+|[\s:|\-–—*]+$/g, "").trim(); }
   function validDay(y, m, d) {
+    // only real work dates: 2020 up to two years ahead (a time like "11:30" must never become a year)
+    if (y < 2020 || y > new Date().getFullYear() + 2) return false;
     if (m < 1 || m > 12 || d < 1 || d > 31) return false;
     var t = new Date(y, m - 1, d);
     return t.getMonth() === m - 1;

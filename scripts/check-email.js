@@ -1321,7 +1321,9 @@ async function handleMail(m, account, counts, rereading) {
     for (const c of existingCalls) {
       const ds = c.dates || [];
       // a lonely date more than 7 months away (no other day of the job near it, not worked, no call time)
-      const keep = ds.filter(e => e.d <= far || e.callTime || e.state === "worked" || ds.some(o => o !== e && near(o.d, e.d)));
+      // impossible dates (before 2020, e.g. a time "11:30" read as a year) always go
+      const keep = ds.filter(e => /^\d{4}-\d\d-\d\d$/.test(e.d || "") && e.d >= "2020-01-01" &&
+        (e.d <= far || e.callTime || e.state === "worked" || ds.some(o => o !== e && near(o.d, e.d))));
       if (keep.length !== (c.dates || []).length) {
         odd += c.dates.length - keep.length;
         await db.collection("calls").doc(c.id).update({ dates: keep });

@@ -513,10 +513,18 @@ const SMAP = Object.fromEntries(STATUSES.map(s => [s.k, s]));
 /* old jobs tidy themselves: once every date has passed, a booked job is "worked", an unanswered
    one "expired", and one you said yes to that never got booked "not booked" */
 /* tidy() only changes what you SEE – it is never saved (the editor puts the real status back) */
+/* a real date for this app: YYYY-MM-DD from 2020 up to next year (anything else is a misread, e.g. "11:30") */
+const FIRST_YEAR = 2020;
+function goodDate(k){
+  if (typeof k !== "string" || !/^\d{4}-\d\d-\d\d$/.test(k)) return false;
+  const y = Number(k.slice(0, 4)), m = Number(k.slice(5, 7)), d = Number(k.slice(8, 10));
+  return y >= FIRST_YEAR && y <= new Date().getFullYear() + 1 && m >= 1 && m <= 12 && d >= 1 && d <= 31;
+}
 function tidy(c){
-  // keep only days with a proper YYYY-MM-DD date; a day with no type is a shoot day
+  // keep only days with a real date; a day with no type is a shoot day
+  if (c.received && !goodDate(String(c.received).slice(0, 10))) c = {...c, received: ""};
   const dates = (Array.isArray(c.dates) ? c.dates : [])
-    .filter(e => e && typeof e.d === "string" && /^\d{4}-\d\d-\d\d$/.test(e.d))
+    .filter(e => e && goodDate(e.d))
     .map(e => e.kind ? e : {...e, kind: "film"});
   c = {...c, dates};
   // a new request whose reply deadline passed (more than 12 hours ago) can't be answered any more
@@ -1014,7 +1022,7 @@ const OUT = [
   {k:"new",     label:"No reply", st:["pending","expired"], color:"var(--faint)"},
 ];
 function outcome(c){ return OUT.find(o => o.st.includes(c.status)) || OUT[3]; }
-function basisDate(c){ return S.basis === "received" ? (c.received || firstDate(c)) : firstDate(c); }
+function basisDate(c){ const r = String(c.received || "").slice(0, 10); return S.basis === "received" && goodDate(r) ? r : firstDate(c); }
 
 /* one year's numbers (calls counted by the chosen date; days counted by their own date) */
 function yearStats(all, y){
@@ -1047,7 +1055,11 @@ function renderStats(){
   const lastMonth = withD.filter(c => basisDate(c) >= lastMo && basisDate(c) < mo).length;
   const fallback = all.filter(c => !c.received).length;
   // the year chosen at the top ("All years" or one year)
-  const years = [...new Set(withD.map(c => basisDate(c).slice(0, 4)).concat(all.flatMap(c => (c.dates||[]).map(e => e.d.slice(0, 4)))))].filter(y => /^\d{4}$/.test(y)).sort().reverse();
+  // years that actually have calls or days (2020 up to next year), newest first
+  const years = [...new Set(withD.map(c => basisDate(c).slice(0, 4)).concat(all.flatMap(c => (c.dates||[]).map(e => e.d.slice(0, 4)))))]
+    .filter(y => /^\d{4}$/.test(y) && Number(y) >= FIRST_YEAR && Number(y) <= now.getFullYear() + 1)
+    .filter(y => { const t = yearStats(all, y); return t.calls || t.worked || (t.ahead.fit + t.ahead.reh + t.ahead.film); })
+    .sort().reverse();
   const thisYear = String(now.getFullYear());
   if (!S.statYear || (S.statYear !== "all" && !years.includes(S.statYear))) S.statYear = years.includes(thisYear) ? thisYear : "all";
   const Y = S.statYear;
