@@ -32,7 +32,7 @@ function report(kind, title, text) { console.log(`::${kind} title=${title}::${te
 
 // Your EP login, from whichever secret names you used. Only the NAMES are reported, never the values.
 function login() {
-  const names = ["EP_EMAIL", "EP_PASSWORD", "EP_EMAIL_1", "EP_EMAIL_2", "EP_PASSWORD_1", "EP_PASSWORD_2", "ET_EMAIL_1", "ET_EMAIL_2"];
+  const names = ["EP_EMAIL", "EP_PASSWORD", "EP_EMAIL_1", "EP_EMAIL_2", "EP_PASSWORD_1", "EP_PASSWORD_2", "ET_EMAIL_1", "ET_EMAIL_2", "EP_TOTP_1", "EP_TOTP_2"];
   const set = names.filter(n => (process.env[n] || "").trim());
   report("notice", "EP secrets found", set.length ? set.join(", ") : "none");
   const vals = set.map(n => ({ n, v: process.env[n].trim() }));
@@ -232,7 +232,7 @@ async function signIn(page) {
       const page = await context.newPage();
       try {
         if (!(await signIn(page))) { failed++; continue; }
-        await saveSession(LOGIN.n, context);
+        try { await saveSession(LOGIN.n, context); } catch (e) { report("warning", "EP", "Signed in, but couldn't save the session (database busy) — a code may be needed next time."); }
         const pages = await readPortal(page, i + 1);
         pages.forEach(p => { p.account = i + 1; all.push(p); });
       } finally { await context.close(); }
