@@ -184,6 +184,12 @@ details.answers ul,.anslist{margin:4px 0 0;padding-left:18px;font-size:13px}
 .bj-meta{font-size:13px;opacity:.85}
 .bjob .soft{opacity:.7}
 .bj-place{padding:10px 16px 0;font-size:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.bj-place.col{flex-direction:column;align-items:stretch;gap:6px}
+.pline{display:grid;grid-template-columns:62px 1fr;gap:8px;align-items:baseline}
+.plab{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.pval{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline}
+.w3w{font-size:12.5px;font-weight:700;color:#E11F26;white-space:nowrap;text-decoration:none}
+.w3w:hover{text-decoration:underline}
 .bj-days{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:6px;padding:12px 16px}
 .bday{font:inherit;border:1px solid transparent;border-radius:8px;padding:6px 9px;cursor:pointer;text-align:left;display:flex;flex-direction:column;gap:1px;min-height:44px}
 .bday b{font-size:13.5px}
@@ -756,6 +762,22 @@ function placeOf(c, e){ return e.callPlace || e.loc || (e.kind==="fit" ? c.fitLo
 function outsideBadge(place){
   return window.EmailParser && EmailParser.londonCheck(place) === "outside" ? `<span class="outside" title="This job is not in London – plan travel">⚠ Outside London</span>` : "";
 }
+/* what3words: the exact 3-metre square from the call sheet (opens the what3words app or website) */
+function w3wLink(w){ return w ? `<a class="w3w" href="https://what3words.com/${encodeURIComponent(w)}" target="_blank" rel="noopener" title="Open in what3words">///${esc(w)} ↗</a>` : ""; }
+/* the exact place for a kind of day (fitting / filming): from the next day of that kind that has one */
+function exactPlace(c, days, kinds){
+  const list = days.filter(x => kinds.includes(x.e.kind || "film"));
+  const withW = list.find(x => x.e.w3w || x.e.postcode || x.e.callPlace) || list.find(x => placeOf(c, x.e));
+  if (!withW) return null;
+  const e = withW.e;
+  return { place: placeOf(c, e), w3w: e.w3w || "", postcode: e.postcode || "" };
+}
+function placeLineHTML(label, p){
+  if (!p || (!p.place && !p.w3w)) return "";
+  // map search: the postcode is the most reliable when the address is long
+  const q = p.postcode && p.place && !p.place.includes(p.postcode) ? p.place + " " + p.postcode : (p.place || p.postcode);
+  return `<div class="pline"><span class="plab">${label}</span><span class="pval">${p.place ? esc(p.place) : ""} ${w3wLink(p.w3w)} ${q ? mapLink(q) : ""} ${outsideBadge(p.place || p.postcode)}</span></div>`;
+}
 function mapLink(place){ return place ? `<a class="maplink" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}" target="_blank" rel="noopener">Map ↗</a>` : ""; }
 
 /* every booked day (green), soonest first */
@@ -817,7 +839,14 @@ function renderBooked(){
         <h3>${esc(nameOf(c))}</h3>
         <div class="bj-meta">${c.agency ? `<b>${esc(c.agency)}</b>` : ""}${c.agency && c.role ? " · " : ""}${esc(c.role || "")}</div>
       </header>
-      <div class="bj-place">${place ? `📍 ${esc(place)} ${mapLink(place)}` : `<span class="soft">📍 location not known yet</span>`} ${outsideBadge(place)}</div>
+      ${(() => {
+        // once booked: the exact place for fittings and for filming (call sheet / booking email)
+        const ahead = shown.filter(x => x.e.d >= TODAY && x.st !== "released" && x.st !== "canceled");
+        const pool = ahead.length ? ahead : shown;
+        const fit = exactPlace(c, pool, ["fit"]), film = exactPlace(c, pool, ["film", "reh"]);
+        const lines = placeLineHTML("Fitting", fit) + placeLineHTML("Filming", film);
+        return lines ? `<div class="bj-place col">${lines}</div>` : `<div class="bj-place">${place ? `📍 ${esc(place)} ${mapLink(place)} ${outsideBadge(place)}` : `<span class="soft">📍 exact place not in yet – it comes with the call sheet</span>`}</div>`;
+      })()}
       <div class="bj-days">${shown.map(x => {
         const e = x.e, st = x.st, off = st === "released" || st === "canceled";
         const pl = placeOf(c, e);

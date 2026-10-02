@@ -16,6 +16,7 @@ const crypto = require("crypto");
 const { ImapFlow } = require("imapflow");
 const { simpleParser } = require("mailparser");
 const admin = require("firebase-admin");
+const { findPlaces } = require("../parser.js");
 const { parseEmail, isAvailabilityCheck, classifyEmail, replyAnswer, extractLinks, parseCallTime, londonCheck, CALL_TIME_SUBJECT, isFromCastingAgency, htmlToText } = require("../parser.js");
 
 // ---------- settings (stored as GitHub secrets, never in the code) ----------
@@ -574,7 +575,9 @@ async function applyCallTime(r, ct, subject) {
   if (!entry) { entry = { d: d, kind: "film" }; dates.push(entry); dates.sort((a, b) => a.d.localeCompare(b.d)); }
   entry.callTime = ct.time;
   const newStatus = c.status === "available" ? "confirmed" : c.status;   // a call time means you're booked
-  if (ct.place) entry.callPlace = ct.place.slice(0, 120);
+  if (ct.place) entry.callPlace = ct.place.slice(0, 160);              // the call sheet is the most exact
+  if (ct.w3w) entry.w3w = ct.w3w;
+  if (ct.postcode) entry.postcode = ct.postcode;
   const chC = withHistory(was, "Call time email", { dates: dates, status: newStatus, updatedAt: new Date().toISOString() });
   await db.collection("calls").doc(c.id).update(chC);
   Object.assign(c, chC);
@@ -1022,6 +1025,29 @@ async function pdfText(pdfs) {
 }
 const SHEET_NAME = /call ?sheet|callsheet|schedule|movement|unit ?base|info/i;
 
+// Booking emails and call sheets often give the exact place: put it on the booked job's days
+// (fittings get the fitting address, shoot/rehearsal days the base address). Days that already
+// have a place from a call sheet keep it.
+async function addPlaces(callId, text) {
+  if (!callId) return;
+  const c = (existingCalls || []).find(x => x.id === callId);
+  if (!c || c.status !== "confirmed") return;
+  const p = findPlaces(text);
+  const dates = (c.dates || []).map(e => ({ ...e }));
+  let changed = false;
+  dates.forEach(e => {
+    const src = e.kind === "fit" ? p.fit : p.film;
+    if (src.address && !e.callPlace) { e.callPlace = src.address; changed = true; }
+    if (src.w3w && !e.w3w) { e.w3w = src.w3w; changed = true; }
+    if (src.postcode && !e.postcode) { e.postcode = src.postcode; changed = true; }
+  });
+  if (!changed) return;
+  const ch = withHistory(c, "Place from a booking email", { dates, updatedAt: new Date().toISOString() });
+  await db.collection("calls").doc(c.id).update(ch);
+  Object.assign(c, ch);
+  stats.places = (stats.places || 0) + 1;
+}
+
 // one email that goes wrong must not stop the others (it's counted and skipped next time)
 async function safeHandle(item, account, counts, rereading) {
   try { await handleMail(item, account, counts, rereading); }
@@ -1119,6 +1145,7 @@ async function handleMail(m, account, counts, rereading) {
     const links = extractLinks(html).concat(allUrls(html));
     const callId = await applyStatusEmail(kind, r, subject, received, null, links, m.trash ? null : { ...m, key });
     if (callId) { counts.updated++; stats[kind][1]++; }
+    if (callId && kind === "booked") await addPlaces(callId, text);
     await remember(callId);
     return;
   }
@@ -1356,6 +1383,7 @@ async function handleMail(m, account, counts, rereading) {
   }
   if (Object.keys(why).length) report("notice", "Not matched – why", Object.entries(why).sort((a, b) => b[1] - a[1]).map(([k, v]) => k + " " + v).join(" · "));
   if (epu.found) report("notice", "EP booking updates", `${epu.found} emails; page opened ${epu.opened}, needed a login ${epu.login}; said booked ${epu.booked}, released ${epu.released}, unclear ${epu.unclear}; matched to a job ${epu.matched}.`);
+  if (stats.places) report("notice", "Places", `Added exact places (address / postcode / what3words) to ${stats.places} booked jobs.`);
   if (stats.pdfRead || stats.pdfFailed) report("notice", "Call sheets", `Read ${stats.pdfRead || 0} PDF attachments` + (stats.pdfFailed ? `, ${stats.pdfFailed} couldn't be read` : "") + ".");
   if (REBUILD) report("notice", "Re-read everything", `Booking emails: ${stats.booked[0]} found, ${stats.booked[1]} matched to a job, ${stats.booked[2]} added as new booked jobs. ` +
     `Release emails: ${stats.released[0]} found, ${stats.released[1]} matched. Answer confirmations: ${stats.replied[0]} found, ${stats.replied[1]} matched. ` +

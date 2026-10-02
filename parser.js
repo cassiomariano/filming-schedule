@@ -192,7 +192,63 @@
       var t = new Date(received + "T12:00:00"); t.setDate(t.getDate() + 1);
       dates = [{ d: toKey(t.getFullYear(), t.getMonth() + 1, t.getDate()), kind: "film" }];
     }
-    return { time: time, place: place, dates: dates };
+    var places = findPlaces(text);
+    var exact = places.film.address || place;
+    return { time: time, place: exact, dates: dates, w3w: places.film.w3w, postcode: places.film.postcode || ((exact.match(POSTCODE) || [])[1] || ""), places: places };
+  }
+
+
+  // ---------- exact places (call sheets, booking and fitting emails) ----------
+  // what3words: "///filled.count.soap" or "w3w: filled.count.soap" (three words with dots)
+  var W3W = /(?:\/\/\/|\bw3w\b[:\s-]*|what3words[^a-z]{0,12})([a-z]{2,}\.[a-z]{2,}\.[a-z]{2,})\b/i;
+  var W3W_ANY = /\/\/\/([a-z]{2,}\.[a-z]{2,}\.[a-z]{2,})\b/gi;
+  var POSTCODE = /\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/;
+  // labels used on call sheets / booking emails, best first
+  var FILM_LABELS = ["SA Base", "S\\.?A\\.? Holding", "Supporting Artists?(?: Base| Holding| Location)?", "Background Base", "Crowd Base", "Unit Base", "Unit base location", "Base", "Report to", "Reporting to", "Location", "Shoot Location", "Filming Location", "Set", "Address", "Venue", "Studio", "Meeting point", "Where"];
+  var FIT_LABELS = ["Fitting Address", "Fitting Location", "Fittings? Venue", "Costume Fitting(?: Address| Location)?", "Costume Address", "Costume Dept", "Wardrobe", "Fitting"];
+  // a label's value, plus the next line or two when the address carries on (street, town, postcode)
+  function placeAfter(lines, labels) {
+    for (var j = 0; j < labels.length; j++) {
+      var re = new RegExp("^\\s*" + labels[j] + "\\s*[:\\-–|@]+\\s*(.*)$", "i");
+      for (var i = 0; i < lines.length; i++) {
+        var m = lines[i].match(re);
+        if (!m) continue;
+        var parts = [clean(m[1])].filter(Boolean);
+        // carry on to the next lines while they look like address lines (no new label, short)
+        for (var k = i + 1; k < lines.length && k <= i + 3; k++) {
+          var nx = clean(lines[k]);
+          if (!nx || nx.length > 70 || /^[A-Za-z ]{2,25}\s*[:|]/.test(nx) || /\b(call|time|date|please|parking|bring)\b/i.test(nx) && !POSTCODE.test(nx)) break;
+          if (parts.length && (POSTCODE.test(parts.join(" ")) && !W3W.test(nx))) break;
+          parts.push(nx);
+        }
+        var v = parts.join(", ").replace(/\s+,/g, ",").slice(0, 160);
+        if (v && !/^(tbc|tba|to follow|n\/a)$/i.test(v)) return v;
+      }
+    }
+    return "";
+  }
+  // {address, postcode, w3w} for filming and for fittings, from any email or call sheet text
+  function findPlaces(text) {
+    var lines = String(text || "").split("\n").map(function (l) { return l.trim(); });
+    function pack(addr, near) {
+      var pc = (addr.match(POSTCODE) || [])[1] || "";
+      var w = (addr.match(W3W) || [])[1] || "";
+      if (!w && near) { var wn = near.match(W3W); if (wn) w = wn[1]; }
+      return { address: addr.replace(W3W, "").replace(/\(\s*\)/g, "").replace(/[\s,]+$/, "").trim(), postcode: pc.toUpperCase().replace(/\s*(\d[A-Z]{2})$/, " $1"), w3w: w.toLowerCase() };
+    }
+    // the text around a label (to find a ///w3w written just under the address)
+    function around(labels) {
+      for (var j = 0; j < labels.length; j++) {
+        var re = new RegExp("^\\s*" + labels[j] + "\\s*[:\\-–|@]", "i");
+        for (var i = 0; i < lines.length; i++) if (re.test(lines[i])) return lines.slice(i, i + 5).join("\n");
+      }
+      return "";
+    }
+    var film = pack(placeAfter(lines, FILM_LABELS), around(FILM_LABELS));
+    var fit = pack(placeAfter(lines, FIT_LABELS), around(FIT_LABELS));
+    // a lone ///w3w in the email (e.g. "Unit base: ///filled.count.soap") goes to filming
+    if (!film.w3w) { var all = String(text || "").match(W3W); if (all && (!fit.w3w || fit.w3w !== all[1].toLowerCase())) film.w3w = all[1].toLowerCase(); }
+    return { film: film, fit: fit };
   }
 
   // ---------- is this place in London? ----------
@@ -742,7 +798,7 @@
     return call;
   }
 
-  var api = { parseEmail: parseEmail, htmlToText: htmlToText, isAvailabilityCheck: isAvailabilityCheck, classifyEmail: classifyEmail, parseCallTime: parseCallTime, londonCheck: londonCheck, CALL_TIME_SUBJECT: CALL_TIME_SUBJECT, replyAnswer: replyAnswer, extractLinks: extractLinks, isFromCastingAgency: isFromCastingAgency, AGENCIES: AGENCIES };
+  var api = { parseEmail: parseEmail, htmlToText: htmlToText, isAvailabilityCheck: isAvailabilityCheck, classifyEmail: classifyEmail, parseCallTime: parseCallTime, findPlaces: findPlaces, londonCheck: londonCheck, CALL_TIME_SUBJECT: CALL_TIME_SUBJECT, replyAnswer: replyAnswer, extractLinks: extractLinks, isFromCastingAgency: isFromCastingAgency, AGENCIES: AGENCIES };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.EmailParser = api;
 })(this);

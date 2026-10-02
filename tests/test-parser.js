@@ -108,5 +108,22 @@ for (const d of details) {
   else console.log(`✓ ${d.name}`);
 }
 
+// ---------- exact places (call sheets / booking emails) ----------
+{
+  const { findPlaces } = require("../parser.js");
+  const sheet = "CALL SHEET\nSA Call: 06:30\nSA Base: Leavesden Studios, Gate 3\nSouth Way, Leavesden\nWD25 7LT\n///filled.count.soap\nCrew Parking: Car park B\nFitting Address: Angels Costumes, 1 Garrick Road, London NW9 6AA (w3w: tables.chair.lamp)";
+  const p = findPlaces(sheet);
+  const checks = [
+    ["film address", p.film.address, "Leavesden Studios, Gate 3, South Way, Leavesden, WD25 7LT"],
+    ["film postcode", p.film.postcode, "WD25 7LT"],
+    ["film w3w", p.film.w3w, "filled.count.soap"],
+    ["fit address", p.fit.address, "Angels Costumes, 1 Garrick Road, London NW9 6AA"],
+    ["fit w3w", p.fit.w3w, "tables.chair.lamp"],
+    ["TBC is not a place", findPlaces("Location: TBC").film.address, ""],
+  ];
+  let bad = 0;
+  checks.forEach(([n, got, want]) => { if (got !== want) { bad++; console.log(`✗ places ${n}: got "${got}", want "${want}"`); } else console.log(`✓ places ${n}`); });
+  failed += bad;
+}
 console.log(failed ? `\n${failed} failed` : "\nAll passed");
 process.exit(failed ? 1 : 0);
