@@ -590,7 +590,9 @@ async function enrichFromPortal(call) {
     }
     if (answers.length) call.answers = answers.slice(0, 12);
     if (yes || no) portal.answered++;
-    if (call.status === "pending" && (yes || no)) call.status = no && !yes ? "declined" : "available";
+    // what you ticked on the EP page is the final word on your answer
+    if (yes && ["pending", "declined", "expired"].includes(call.status)) call.status = "available";
+    else if (no && !yes && ["pending", "available"].includes(call.status)) call.status = "declined";
   }
   if (call.project && call.dates.length) { call.review = false; call.reviewReason = ""; }
   return true;
@@ -599,8 +601,12 @@ async function enrichFromPortal(call) {
 async function refreshPendingPortalPages() {
   await loadExistingCalls();
   const dbg = !!process.env.PORTAL_DEBUG;
-  const due = existingCalls.filter(c => c.id && (dbg ? ["pending", "available"] : ["pending"]).includes(c.status) && portalLink(c) &&
-    (dbg || !c.portalCheckedAt || Date.now() - new Date(c.portalCheckedAt).getTime() > 20 * 60 * 1000)).slice(0, dbg ? 30 : 6);
+  const today = londonDate();
+  // new requests: every 20 minutes; ones you've answered (with days still ahead): every 6 hours
+  const every = { pending: 20, available: 360, declined: 360 };
+  const due = existingCalls.filter(c => c.id && every[c.status] && portalLink(c) && (c.dates || []).some(e => e.d >= today) &&
+    (dbg || !c.portalCheckedAt || Date.now() - new Date(c.portalCheckedAt).getTime() > every[c.status] * 60 * 1000))
+    .sort((a, b) => (a.portalCheckedAt || "").localeCompare(b.portalCheckedAt || "")).slice(0, dbg ? 30 : 8);
   for (const c of due) {
     const before = JSON.stringify([c.status, c.project, c.dates, c.answers]);
     const copy = { ...c };
@@ -642,9 +648,13 @@ async function applyReply(r, links, answer) {
   }
   if (match.length !== 1) return null;
   const c = match[0];
-  if (c.status === answer) return c.id;
-  await db.collection("calls").doc(c.id).update({ status: answer, repliedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-  c.status = answer;
+  const copy = { ...c, status: c.status === "pending" ? answer : c.status };
+  if (c.status === "pending" || c.status !== answer) copy.status = answer;
+  if (portalLink(c)) await enrichFromPortal(copy);       // the EP page shows what you really ticked
+  if (copy.status === c.status && JSON.stringify(copy.dates) === JSON.stringify(c.dates)) return c.id;
+  const { id, ...body } = copy;
+  await db.collection("calls").doc(c.id).set({ ...body, repliedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  Object.assign(c, copy);
   return c.id;
 }
 

@@ -184,9 +184,20 @@
   }
 
   // In a "thank you for replying" email: did you say available or not?
+  // "Thank you for letting us know that you are available" → available; "...not available" → declined.
+  // The subject decides when it can. The body is only read for a sentence about YOU
+  // ("you are not available"), because these emails often repeat the "Available / Not available"
+  // choices or say "if you become unavailable", which says nothing about your answer.
   function replyAnswer(subject, text) {
-    var t = (subject || "") + " " + (text || "").slice(0, 1500);
-    return /\bunavailable\b|not available|can'?t attend|cannot attend|declined/i.test(t) ? "declined" : "available";
+    var s = subject || "";
+    if (/\b(un)?available\b|not available|can'?t attend|cannot attend|declin/i.test(s))
+      return /\bunavailable\b|not available|can'?t attend|cannot attend|declin/i.test(s) ? "declined" : "available";
+    var t = String(text || "").slice(0, 2000);
+    if (/(you are|you're|you have said you are|you said you are|you've told us you are|you're not|you are not) (not |un)?available/i.test(t)) {
+      return /(you are|you're|you have said you are|you said you are|you've told us you are) (not |un)available|you('re| are) not available/i.test(t) ? "declined" : "available";
+    }
+    if (/(you|your) (have )?declined|you can'?t attend|you cannot attend/i.test(t)) return "declined";
+    return "available";
   }
 
   // ---------- the agency's reply links (Respond / Yes / No) ----------
@@ -462,6 +473,17 @@
       received: received,
       notes: ""
     };
+
+    // the reply deadline is not a work day: drop a date that equals the deadline (or the day the
+    // email arrived) when it sits apart from the job's other days ("please reply by Fri 2 Oct")
+    var dl = (call.respondBy || "").slice(0, 10);
+    if (call.dates.length > 1) {
+      call.dates = call.dates.filter(function (e) {
+        if (e.d !== dl && e.d !== received) return true;
+        var t = new Date(e.d + "T12:00:00").getTime();
+        return call.dates.some(function (o) { return o !== e && Math.abs(new Date(o.d + "T12:00:00").getTime() - t) <= 4 * 864e5; });
+      });
+    }
 
     // a few useful lines for the notes
     var keep = /photo id|haircut|hair cut|parking|pick ?ups?|call times?|digi-?fit|1st option|2nd option|firearms|night shoot|travel|accommodation|tbc/i;
