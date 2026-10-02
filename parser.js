@@ -226,6 +226,10 @@
     if (/\breleased?\b|cancel+ed|cancellation|no longer (needed|required)|not (required|selected|needed)|unsuccessful|stood down/i.test(subj)) return "released";
     if (CALL_TIME_SUBJECT.test(subj)) return "calltime";
     if (/booking confirm|confirmed booking|you('| a)re booked|you have been booked|booked (for|on)|booking:\s|is confirmed|^\W*booked\b|^\W*booking\s*[-–:]|booking details|confirmed (fitting|day|date|dates|for)|confirm(ation of)? your dates|^\W*confirmation\b/i.test(subj)) return "booked";
+    // a release written in the email itself ("Thank you for your availability, unfortunately you are not required")
+    var top = String(text || "").slice(0, 1500);
+    var looksLikeAv = /\bav\b|availability (check|request|enquiry)|are you available|availability for/i.test(subj) || /\bif (you|we)\b[^.]{0,40}(not (be )?required|released)/i.test(top);
+    if (!looksLikeAv && /(you have been|you've been|you are|you're|we have|we've) (now )?(released|stood down)|released you|(will not|won't|no longer) (be )?(need|requir)|not (be )?(required|needed) (for|on|any ?more)|(have not|haven't|were not|weren't) been (selected|chosen|successful)|has been cancel+ed|(filming|shoot|job|booking) (is |has been )?cancel+ed/i.test(top)) return "released";
     // the agency confirming YOUR reply ("Thank you for letting us know that you are available")
     if (/thank you for (letting us know|responding|your (response|reply)|being (un)?available|confirming)/i.test(subj)) return "replied";
     if (/thank|review|invit|newsletter|survey|payment|invoice/i.test(subj)) return null;
@@ -388,6 +392,8 @@
         if (/☒\s*not available/i.test(line)) entry.answer = "no";
         else if (/☒\s*available/i.test(line)) entry.answer = "yes";
         if (/night/i.test(line)) entry.night = true;
+        // in a booking email: days kept "available / on hold" rather than confirmed
+        if (/pencil|on hold|\bhold\b|stand ?-?by|remain(ing)? available|still available|keep .{0,20}available|provisional|to be confirmed|\btbc\b/i.test(line)) entry.hold = true;
         var id = entry.d + entry.kind;
         if (seen[id]) {                       // same day again: keep extra details
           if (entry.loc && !seen[id].loc) seen[id].loc = entry.loc;

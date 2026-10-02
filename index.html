@@ -308,6 +308,8 @@ textarea.inp{min-height:84px;resize:vertical}
 .drow .dd{flex:1 1 140px;min-width:0}
 .drow .dk{flex:0 0 84px}
 .drow .dst{flex:0 0 112px}
+.dst-available{background:var(--st-available);color:var(--st-available-fg)}
+.drow .dow{font-family:var(--f-mono);font-size:12px;font-weight:600;min-width:30px;text-align:center}
 .dst-worked{background:var(--st-done);color:var(--st-done-fg)}
 .dst-canceled,.dst-released{background:var(--st-canceled);color:var(--st-canceled-fg)}
 .ibtn{flex:0 0 34px;height:34px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:8px;background:var(--surface);cursor:pointer;font-size:14px;padding:0;color:var(--ink)}
@@ -416,6 +418,7 @@ function monthStart(d){ return new Date(d.getFullYear(), d.getMonth(), 1); }
 function weekStart(d){ const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay()+6)%7)); return x; }
 const TODAY = key(new Date());
 const fmtShort = k => { const d = parse(k); return `${DOW[(d.getDay()+6)%7]} ${d.getDate()} ${MONTHS[d.getMonth()].slice(0,3)}`; };
+const fmtDay = k => { const d = parse(k); return `${DOW[(d.getDay()+6)%7]} ${d.getDate()} ${MONTHS[d.getMonth()].slice(0,3)}${d.getFullYear() !== new Date().getFullYear() ? " "+String(d.getFullYear()).slice(2) : ""}`; };
 const fmtDM = k => { const d = parse(k); return `${d.getDate()} ${MONTHS[d.getMonth()].slice(0,3)}${d.getFullYear() !== new Date().getFullYear() ? " "+String(d.getFullYear()).slice(2) : ""}`; };
 function dueText(iso){
   if (!iso) return "";
@@ -441,17 +444,18 @@ function normAgency(a){ const s = (a||"").trim(); const k = s.toLowerCase().repl
 
 /* the status of ONE day: a single day can be released, canceled or worked
    even when the rest of the booking is still on */
-const DAY_STATES = [["", "Same as the call"], ["worked", "Worked"], ["released", "Released"], ["canceled", "Canceled"]];
+const DAY_STATES = [["", "Same as the call"], ["available", "Available (on hold)"], ["worked", "Worked"], ["released", "Released"], ["canceled", "Canceled"]];
 function dayStatus(c, e){
   if (e.state === "released") return "released";
   if (e.state === "canceled") return "canceled";
+  if (e.state === "available") return "available";       // production kept this day as "available / on hold"
   if (e.state === "worked" || e.done) return "done";
   return c.status;
 }
 
-/* tap a day: booked → worked (blue) → canceled (grey) → released (grey) → booked */
-const CYCLE = ["", "worked", "canceled"];
-const CYCLE_WORDS = {"": "back to automatic colour", worked: "done ✓ (blue)", canceled: "canceled (grey)", released: "released (grey)"};
+/* tap a day: automatic → available, on hold (yellow) → done (blue) → canceled (grey) → automatic */
+const CYCLE = ["", "available", "worked", "canceled"];
+const CYCLE_WORDS = {"": "back to automatic colour", available: "available / on hold (yellow)", worked: "done ✓ (blue)", canceled: "canceled (grey)", released: "released (grey)"};
 async function cycleDay(id, i){
   const c = S.calls.get(id); if (!c || !c.dates || !c.dates[i]) return;
   const dates = c.dates.map(e => ({...e}));
@@ -465,7 +469,7 @@ async function cycleDay(id, i){
     toast(`${nameOf(c)} · ${fmtShort(e.d)}: ${CYCLE_WORDS[next]}`);
   } catch (err) { writeFailed(err); }
 }
-const DAY_TIP = "Tap: done (blue) → canceled (grey) → automatic";
+const DAY_TIP = "Tap: available (yellow) → done (blue) → canceled (grey) → automatic";
 
 /* entries per day for the calendar */
 function dayIndex(){
@@ -633,7 +637,7 @@ function renderBooked(){
   const outside = jobs.filter(j => EmailParser.londonCheck(mainPlace(j.c, j.days)) === "outside").length;
   let h = `<div class="bar"><h2 class="month-title" style="margin:0">Booked</h2><span class="src">${jobs.length} job${jobs.length===1?"":"s"} · ${daysAhead} day${daysAhead===1?"":"s"} ahead${outside?` · <b style="color:var(--attn)">${outside} outside London</b>`:""}</span><span style="flex:1"></span>
     <label class="tog"><input type="checkbox" id="showPastBooked" ${S.showPastBooked?"checked":""}> Show past days</label></div>
-    <div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day to change it</span></div>`;
+    <div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Available / on hold</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day to change it</span></div>`;
   if (!jobs.length){ main.innerHTML = h + `<div class="empty"><h2>No booked jobs yet</h2><p>When a job is confirmed (by you, or by a booking email), it appears here with its days, call times and location.</p></div>`; return; }
   h += `<div class="bjobs">`;
   jobs.forEach((j, n) => {
@@ -654,7 +658,7 @@ function renderBooked(){
       <div class="bj-days">${shown.map(x => {
         const e = x.e, st = x.st, off = st === "released" || st === "canceled";
         const pl = placeOf(c, e);
-        const sub = [e.kind !== "film" ? kindName(e.kind) : "", e.callTime ? "call " + e.callTime : (st === "confirmed" ? "call tbc" : ""), pl && pl !== place ? pl : "", off ? st : "", st === "done" ? "worked ✓" : ""].filter(Boolean).join(" · ");
+        const sub = [e.kind !== "film" ? kindName(e.kind) : "", st === "available" ? "on hold" : "", e.callTime ? "call " + e.callTime : (st === "confirmed" ? "call tbc" : ""), pl && pl !== place ? pl : "", off ? st : "", st === "done" ? "worked ✓" : ""].filter(Boolean).join(" · ");
         return `<button type="button" class="bday ${clsS(st)}${off?" off":""}${e.d < TODAY ? " past" : ""}" data-cycle="${c.id}|${x.i}" title="${DAY_TIP}"><b>${fmtShort(e.d)}${e.night?" ☾":""}</b><small>${esc(sub || " ")}</small></button>`;
       }).join("")}</div>
       <footer class="bj-foot"><span>${j.ahead.length} day${j.ahead.length===1?"":"s"} ahead${worked?` · ${worked} worked`:""}</span>${c.emailSubject?`<a class="maplink" href="https://mail.yahoo.com/d/search/keyword=${encodeURIComponent(c.emailSubject)}" target="_blank" rel="noopener">✉ Email ↗</a>`:""}<button class="btn small ghost" data-open="${c.id}">Details</button></footer>
@@ -698,7 +702,7 @@ function upcomingHTML(cl){
     ["available", "Waiting to hear", "You said you're available; production hasn't confirmed yet."],
     ["pending", "New – reply needed", "Accept or decline these."],
   ];
-  h += `<div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Available – waiting to hear</span><span><i class="sw s-pending"></i>New</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day to mark it done (blue) or canceled (grey)</span></div>`;
+  h += `<div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Available – waiting to hear</span><span><i class="sw s-pending"></i>New</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day: yellow → blue → grey → back</span></div>`;
   for (const [st, title, sub] of sections){
     const list = jobs.filter(c => c.status === st);
     if (!list.length) continue;
@@ -761,7 +765,7 @@ function renderCalls(){
     <select class="inp" id="statusSel" aria-label="Status">${[["open","Open (new, available, confirmed)"],["review","From email – to check"],["pending","New – reply needed"],["available","Available"],["confirmed","Confirmed"],["done","Done"],["declined","Declined"],["closed","Released / canceled / expired"],["all","All calls"]].map(([v,l]) => `<option value="${v}"${S.listStatus===v?" selected":""}>${l}</option>`).join("")}</select>
     <select class="inp" id="agencySel" aria-label="Agency"><option value="">All agencies</option>${agencies.map(a => `<option${S.agency===a?" selected":""}>${esc(a)}</option>`).join("")}</select>
     <select class="inp" id="sortSel" aria-label="Sort">${[["next","Next date"],["received","Newest received"],["reply","Reply deadline"],["project","Project A–Z"]].map(([v,l]) => `<option value="${v}"${S.sort===v?" selected":""}>Sort: ${l}</option>`).join("")}</select>
-  </div><div class="src">${list.length} of ${S.calls.size} calls</div><div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Available – waiting to hear</span><span><i class="sw s-pending"></i>New</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day to mark it done (blue) or canceled (grey)</span></div><div class="list">`;
+  </div><div class="src">${list.length} of ${S.calls.size} calls</div><div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Available – waiting to hear</span><span><i class="sw s-pending"></i>New</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day: yellow → blue → grey → back</span></div><div class="list">`;
   if (!list.length) h += `<div class="empty"><h2>No calls here</h2><p>Try another status or agency, or add a new availability check.</p></div>`;
   for (const c of list){
     const du = c.status === "pending" ? dueText(c.respondBy) : null;
@@ -771,7 +775,7 @@ function renderCalls(){
       <div class="body" data-open="${c.id}" role="button" tabindex="0">
         <div class="line1"><span class="proj">${esc(nameOf(c))}</span><span class="pill ${clsS(c.status)}">${SMAP[c.status]?.short||c.status}</span>${c.attention?`<span class="flag">● Attention</span>`:""}</div>
         <div class="meta">${c.agency?`<span><b>${esc(c.agency)}</b></span>`:""}${c.role?`<span>${esc(c.role)}</span>`:""}${(c.location||c.filmLocation)?`<span>📍 ${esc(c.location||c.filmLocation)}</span>`:""}${c.received?`<span>Received ${fmtDM(c.received)}</span>`:""}</div>
-        ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"; return `<button type="button" class="dchip ${clsS(st)} ${e.kind}${off?" off":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${kindName(e.kind)} · ${SMAP[st].short} · ${DAY_TIP}">${e.kind!=="film"?kindLetter(e.kind)+" ":""}${fmtDM(e.d)}${e.night?" ☾":""}${st==="done"?" ✓":""}</button>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
+        ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"; return `<button type="button" class="dchip ${clsS(st)} ${e.kind}${off?" off":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${kindName(e.kind)} · ${SMAP[st].short} · ${DAY_TIP}">${e.kind!=="film"?kindLetter(e.kind)+" ":""}${fmtDay(e.d)}${e.night?" ☾":""}${st==="done"?" ✓":""}</button>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
         ${du?`<span class="due${du.late?" late":""}">${esc(du.txt)}</span>`:""}
       </div>
       <div class="acts">${replyHTML(c)}${c.status==="confirmed" && lastDate(c) && lastDate(c) < TODAY ? `<button class="btn small" data-set="done" data-id="${c.id}">Mark done</button>` : ""}</div>
@@ -911,16 +915,16 @@ function drawEditor(){
           const st = e.state || (e.done ? "worked" : "");
           const showLoc = !!(e.loc || e.callPlace || e.callTime) || openLoc.has(i);
           return `<div class="drow" data-i="${i}">
-            <input class="inp dd" type="date" id="dd-${i}" value="${e.d}" aria-label="Date">
+            <span class="dow" id="dw-${i}">${e.d ? DOW[(parse(e.d).getDay()+6)%7] : ""}</span><input class="inp dd" type="date" id="dd-${i}" value="${e.d}" aria-label="Date">
             <select class="inp dk" id="dk-${i}" aria-label="Fitting or shoot"><option value="film"${e.kind==="film"?" selected":""}>Shoot</option><option value="fit"${e.kind==="fit"?" selected":""}>Fit</option><option value="reh"${e.kind==="reh"?" selected":""}>Rehearsal</option></select>
-            <select class="inp dst dst-${st||"auto"}" id="dst-${i}" aria-label="What happened this day"><option value=""${st===""?" selected":""}>Auto</option><option value="worked"${st==="worked"?" selected":""}>Done ✓</option><option value="canceled"${st==="canceled"?" selected":""}>Canceled</option><option value="released"${st==="released"?" selected":""}>Released</option></select>
+            <select class="inp dst dst-${st||"auto"}" id="dst-${i}" aria-label="What happened this day"><option value=""${st===""?" selected":""}>Auto</option><option value="available"${st==="available"?" selected":""}>Available</option><option value="worked"${st==="worked"?" selected":""}>Done ✓</option><option value="canceled"${st==="canceled"?" selected":""}>Canceled</option><option value="released"${st==="released"?" selected":""}>Released</option></select>
             <label class="ibtn" title="Night shoot"><input type="checkbox" id="dn-${i}" ${e.night?"checked":""}><span aria-hidden="true">☾</span><span class="sr">Night</span></label>
             <button type="button" class="ibtn${showLoc?" on":""}" data-showloc="${i}" title="Place and call time for this day" aria-label="Place and call time">📍</button>
             <button type="button" class="ibtn" data-deldate="${i}" title="Remove this date" aria-label="Remove date">✕</button>
             <div class="dextra"${showLoc?"":" hidden"}><input class="inp loc" id="dl-${i}" placeholder="Place for this day" value="${esc(e.callPlace||e.loc||"")}"><label class="ct">Call <input class="inp" type="time" id="dct-${i}" value="${esc(e.callTime||"")}"></label></div>
           </div>`;}).join("")}</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" data-adddate="film">+ Shoot date</button><button class="btn small" data-adddate="fit">+ Fitting date</button></div>
-        <p class="src" style="margin:0">Auto = coloured by the call's status. Change one day to Done, Canceled or Released when only that day changed.</p></div>
+        <p class="src" style="margin:0">Auto = coloured by the call's status. Change one day to Available (yellow, on hold), Done, Canceled or Released when only that day is different.</p></div>
       <details class="more"${d.notes||d.rate||d.respondBy?" open":""}><summary>More details <span class="src">received, reply by, places, rate, notes</span></summary>
         <div class="more-in">
           <label class="tog"><input type="checkbox" id="f-attn" ${d.attention?"checked":""}> Needs attention (red marker)</label>
@@ -1110,6 +1114,7 @@ document.addEventListener("keydown", e => {
 });
 document.addEventListener("change", e => {
   if (e.target.classList.contains("dst")) e.target.className = "inp dst dst-" + (e.target.value || "auto");
+  if (e.target.classList.contains("dd")){ const w = document.getElementById("dw-" + e.target.id.slice(3)); if (w && e.target.value) w.textContent = DOW[(parse(e.target.value).getDay()+6)%7]; }
   if (e.target.id === "showPastBooked"){ S.showPastBooked = e.target.checked; renderBooked(); }
   if (e.target.id === "statusSel"){ S.listStatus = e.target.value; save("listStatus", S.listStatus); renderCalls(); }
   if (e.target.id === "agencySel"){ S.agency = e.target.value; renderCalls(); }

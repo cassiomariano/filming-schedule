@@ -200,6 +200,14 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
     const byDay = open.filter(c => c.status !== "released" && sameName(c.agency, r.agency) && (c.dates || []).some(e => listed.has(e.d)));
     if (byDay.length === 1) matches = byDay;
   }
+  if (matches.length !== 1 && kind === "released" && r.agency) {
+    // no name in the release: the one job from that agency you're still on, with days ahead of the email
+    const since = String(received || "").slice(0, 10);
+    const live = open.filter(c => ["available", "confirmed", "pending"].includes(c.status) && sameName(c.agency, r.agency) &&
+      (c.dates || []).some(e => e.d >= since && (!listed.size || listed.has(e.d))));
+    const acted = live.filter(c => c.status !== "pending");
+    if (acted.length === 1) matches = acted; else if (live.length === 1) matches = live;
+  }
   if (matches.length !== 1) {
     const anyStatus = r.project ? existingCalls.filter(c => c.project && sameProject(c.project, r.project)) : [];
     miss(`${kind}: ` + (!r.project ? "no name in email" : matches.length > 1 ? "several jobs match" :
@@ -237,16 +245,24 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
   const note = (kind === "booked" ? "Booked" : "Released") + " by email on " + received + ": " + String(subject).slice(0, 120);
   const changes = { status: status, updatedAt: new Date().toISOString() };
   if (!String(c.notes || "").includes(note)) changes.notes = (c.notes ? c.notes + " • " : "") + note;
-  // A booking email that lists dates: those days are confirmed (green). Shoot days it does NOT
-  // list are marked released (grey). Fittings are only touched if the email lists fitting days.
+  // A booking email that lists dates: those days are booked (green). Days it says are "on hold /
+  // pencilled / tbc", and shoot days it doesn't mention, stay yellow (still available, not confirmed).
+  // Fittings are only touched if the email lists fitting days.
   if (kind === "booked" && listed.size) {
     const listsFit = r.dates.some(x => x.kind === "fit"), listsFilm = r.dates.some(x => x.kind === "film");
+    const hold = new Set(r.dates.filter(x => x.hold).map(x => x.d));
     const dates = (c.dates || []).map(e => ({ ...e }));
     dates.forEach(e => {
-      if (listed.has(e.d)) { if (e.state === "released" || e.state === "canceled") delete e.state; }
-      else if (!e.state && ((e.kind === "film" && listsFilm) || (e.kind === "fit" && listsFit))) e.state = "released";
+      if (hold.has(e.d)) { if (!e.state || e.state === "released" || e.state === "canceled") e.state = "available"; }
+      else if (listed.has(e.d)) { if (["released", "canceled", "available"].includes(e.state)) delete e.state; }
+      else if ((!e.state || (REBUILD && e.state === "released")) && ((e.kind === "film" && listsFilm) || (e.kind === "fit" && listsFit))) e.state = "available";
+      // (re-reading: days an older version greyed out become yellow again; later release emails grey them properly)
     });
-    r.dates.forEach(x => { if (!dates.some(e => e.d === x.d)) dates.push({ ...x }); });
+    r.dates.forEach(x => {
+      if (dates.some(e => e.d === x.d)) return;
+      const { hold: h, answer, ...day } = x;
+      dates.push(h ? { ...day, state: "available" } : day);
+    });
     dates.sort((a, b) => a.d.localeCompare(b.d));
     changes.dates = dates;
     c.dates = dates;
@@ -262,7 +278,7 @@ function buildCall(r, src) {
   return {
     project: r.project, agency: r.agency, role: r.role,
     location: r.location, fitLocation: r.fitLocation, filmLocation: r.filmLocation,
-    rate: r.rate, notes: r.notes, dates: r.dates,
+    rate: r.rate, notes: r.notes, dates: r.dates.map(({ hold, ...d }) => d),
     respondBy: r.respondBy, received: src.received,
     status: "pending", attention: false,
     review: r.review, reviewReason: r.reviewReason,
