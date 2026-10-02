@@ -136,7 +136,8 @@ async function getKnownAgencies() {
   const dayOld = !data || Date.now() - new Date(data.updatedAt).getTime() > 24 * 60 * 60 * 1000;
   if (!dayOld && process.env.CLEANUP !== "true") return data.names || [];
   await loadExistingCalls();
-  const names = trustedAgencies(existingCalls);
+  // only ever grows: merging or cleaning up calls must not make the robot forget an agency
+  const names = [...new Set([...(data && data.names || []), ...trustedAgencies(existingCalls)])];
   await ref.set({ names: names, updatedAt: new Date().toISOString() });
   return names;
 }
@@ -1006,6 +1007,7 @@ async function handleMail(m, account, counts, rereading) {
 
   if (process.env.FIND) { await findEmails(process.env.FIND); process.exit(0); }
   if (REBUILD || process.env.CLEANUP === "true") {
+    report("notice", "Agencies", `${knownAgencies.length} known agency names.`);
     const n = await mergeDuplicates();
     report("notice", "Duplicates", `Merged ${n} duplicate copies into their jobs.`);
   }
