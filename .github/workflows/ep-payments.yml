@@ -40,6 +40,12 @@ jobs:
           EP_PASSWORD_2: ${{ secrets.EP_PASSWORD_2 }}
           ET_EMAIL_1: ${{ secrets.ET_EMAIL_1 }}
           ET_EMAIL_2: ${{ secrets.ET_EMAIL_2 }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          YAHOO_EMAIL_1: ${{ secrets.YAHOO_EMAIL_1 }}
+          YAHOO_APP_PASSWORD_1: ${{ secrets.YAHOO_APP_PASSWORD_1 }}
+          YAHOO_EMAIL_2: ${{ secrets.YAHOO_EMAIL_2 }}
+          YAHOO_APP_PASSWORD_2: ${{ secrets.YAHOO_APP_PASSWORD_2 }}
           EP_ONLY: ${{ github.event.inputs.only || '' }}
           EP_EXPORT: ${{ github.event.inputs.export || 'true' }}
       - name: Put the sealed export on the vault branch

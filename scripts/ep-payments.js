@@ -12,6 +12,20 @@ const fs = require("fs");
 const { chromium } = require("playwright");
 const { seal } = require("./vault.js");
 
+const crypto = require("crypto");
+const admin = require("firebase-admin");
+const { ImapFlow } = require("imapflow");
+const { simpleParser } = require("mailparser");
+const { open: unseal } = require("./vault.js");
+
+// the database (same key as the email robot): for the code you type in the app,
+// and to keep the signed-in session sealed so EP doesn't ask for a code every time
+let raw = String(process.env.FIREBASE_SERVICE_ACCOUNT || "").replace(/[“”„‟″]/g, '"').replace(/[‘’]/g, "'");
+const serviceAccount = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
+admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+const db = admin.firestore();
+const ROBOT_KEY = crypto.createPublicKey(serviceAccount.private_key).export({ type: "spki", format: "pem" });
+
 const PORTAL = "https://uk.epcastingportal.com";
 let LOGIN = null;
 function report(kind, title, text) { console.log(`::${kind} title=${title}::${text}`); }
@@ -49,8 +63,74 @@ async function describeForm(page) {
   });
 }
 
+// the screen asking for a verification code
+async function isCodeScreen(page) {
+  return page.evaluate(() => /verification code|one-time|passcode|security code|enter (the )?code|we('ve| have) sent|sent a code/i.test(document.body.innerText));
+}
+// the code: typed by you in the app (database "ep/code"), or found in an EP email in your Yahoo inbox
+async function waitForCode(n) {
+  const ref = db.collection("ep").doc("code");
+  const askedAt = new Date().toISOString();
+  await ref.set({ status: "waiting", account: n, askedAt, code: "" });
+  if (process.env.NTFY_TOPIC) {
+    await fetch("https://ntfy.sh/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+      topic: process.env.NTFY_TOPIC, title: "EP sign-in code needed", priority: 5, tags: ["key"],
+      message: "EP sent you a sign-in code. Open the Filming Schedule app and type it in the yellow box (within 8 minutes).",
+      click: "https://cassiomariano.github.io/filming-schedule/" }) }).catch(() => {});
+  }
+  const until = Date.now() + 8 * 60 * 1000;
+  while (Date.now() < until) {
+    const d = (await ref.get()).data() || {};
+    if (d.code && d.askedAt === askedAt) { await ref.set({ status: "used", account: n, askedAt, code: "" }); report("notice", "EP code", "Code typed in the app."); return String(d.code).replace(/\s/g, ""); }
+    const mailed = await codeFromEmail(new Date(askedAt));
+    if (mailed) { await ref.set({ status: "used", account: n, askedAt, code: "" }); report("notice", "EP code", "Code found in an EP email."); return mailed; }
+    await new Promise(r => setTimeout(r, 6000));
+  }
+  await ref.set({ status: "expired", account: n, askedAt, code: "" });
+  return null;
+}
+async function codeFromEmail(since) {
+  for (const sfx of ["1", "2"]) {
+    const user = process.env["YAHOO_EMAIL_" + sfx], pass = process.env["YAHOO_APP_PASSWORD_" + sfx];
+    if (!user || !pass) continue;
+    const client = new ImapFlow({ host: "imap.mail.yahoo.com", port: 993, secure: true, auth: { user, pass }, logger: false });
+    client.on("error", () => {});
+    try {
+      await client.connect();
+      const lock = await client.getMailboxLock("INBOX");
+      try {
+        const uids = (await client.search({ since: new Date(since.getTime() - 864e5) }, { uid: true })) || [];
+        for (const uid of uids.slice(-15).reverse()) {
+          const msg = await client.fetchOne(uid, { envelope: true, source: true }, { uid: true });
+          const env = msg.envelope || {};
+          const from = ((env.from && env.from[0]) || {}).address || "";
+          if (!/ep\.com|entertainmentpartners|epcastingportal|pingidentity/i.test(from)) continue;
+          if (env.date && new Date(env.date) < new Date(since.getTime() - 60000)) continue;
+          const mail = await simpleParser(msg.source);
+          const m = String((env.subject || "") + " " + (mail.text || "")).match(/\b(\d{6}|\d{4,8})\b/);
+          if (m) return m[1];
+        }
+      } finally { lock.release(); }
+    } catch (e) { /* try the other inbox */ } finally { try { await client.logout(); } catch (_) {} }
+  }
+  return null;
+}
+// the signed-in session (cookies), sealed for the robot only, so the next run skips the code
+async function loadSession(n) {
+  try {
+    const d = (await db.collection("ep").doc("session" + n).get()).data();
+    return d && d.box ? unseal(serviceAccount.private_key, JSON.parse(d.box)) : undefined;
+  } catch (e) { return undefined; }
+}
+async function saveSession(n, context) {
+  const state = await context.storageState();
+  await db.collection("ep").doc("session" + n).set({ box: JSON.stringify(seal(ROBOT_KEY, state)), at: new Date().toISOString() });
+}
+
 async function signIn(page) {
-  await page.goto(PORTAL + "/my/payments", { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.goto(PORTAL + "/my/payments", { waitUntil: "networkidle", timeout: 60000 });
+  const signedIn = await page.evaluate(() => /log ?out|sign ?out/i.test(document.body.innerText) && !/log in|login/i.test(document.querySelector("nav, header")?.innerText || ""));
+  if (page.url().startsWith(PORTAL) && signedIn) { report("notice", "EP sign-in", "Still signed in from last time (no code needed)."); return true; }
   // the "Log In" link goes to EP's sign-in site (auth.ep.com); follow its address directly
   if (page.url().startsWith(PORTAL)) {
     const hrefs = await page.$$eval("a[href*='auth.ep.com']", as => as.map(a => a.href));
@@ -81,10 +161,28 @@ async function signIn(page) {
   for (let i = 0; i < 6 && !page.url().startsWith(PORTAL); i++) {
     await page.waitForTimeout(3000);
     // a wrong password keeps you on the password screen with an error message
+    if (await isCodeScreen(page)) break;                   // the code step comes next
     const bad = (await pass().count()) && await page.evaluate(() => /incorrect|invalid|not recogni|locked/i.test(document.body.innerText));
     if (bad) { report("error", "EP sign-in", "EP says the email or password isn't right (or the account is locked). Check the secrets."); return false; }
     const handover = page.locator("button:has-text('Submit'):visible, input[type=submit][value*=Submit i]:visible").first();
     if (!page.url().startsWith(PORTAL) && (await handover.count()) && !(await pass().count())) await handover.click().catch(() => {});
+  }
+  // EP's verification code
+  if (!page.url().startsWith(PORTAL) && await isCodeScreen(page)) {
+    report("notice", "EP sign-in", "EP asks for a verification code: " + await describeForm(page));
+    const code = await waitForCode(LOGIN.n);
+    if (!code) { report("error", "EP sign-in", "No code arrived within 8 minutes. Run it again and type the code in the app when your phone buzzes."); return false; }
+    const box = page.locator("input[autocomplete=one-time-code]:visible, input[name*=code i]:visible, input[id*=code i]:visible, input[name*=otp i]:visible, input[id*=otp i]:visible, input[type=tel]:visible, input[type=number]:visible, input[type=text]:visible, input[type=password]:visible").first();
+    await box.fill(code);
+    const remember = page.locator("input[type=checkbox]:visible").first();
+    if (await remember.count()) await remember.check().catch(() => {});          // "remember this device"
+    const go = page.locator("button:has-text('Verify'):visible, button:has-text('Submit'):visible, button:has-text('Continue'):visible, button:has-text('Sign'):visible, button[type=submit]:visible").first();
+    await go.click();
+    for (let i = 0; i < 6 && !page.url().startsWith(PORTAL); i++) {
+      await page.waitForTimeout(3000);
+      const handover = page.locator("button:has-text('Submit'):visible").first();
+      if (!(await isCodeScreen(page)) && (await handover.count())) await handover.click().catch(() => {});
+    }
   }
   try { await page.waitForURL(u => String(u).startsWith(PORTAL), { timeout: 30000 }); }
   catch (e) {
@@ -107,10 +205,12 @@ async function signIn(page) {
     for (let i = 0; i < logins.length; i++) {
       if (process.env.EP_ONLY && String(i + 1) !== process.env.EP_ONLY) continue;
       LOGIN = logins[i];
-      const context = await browser.newContext({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36", viewport: { width: 1366, height: 900 } });
+      const saved = await loadSession(LOGIN.n);
+      const context = await browser.newContext({ storageState: saved, userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36", viewport: { width: 1366, height: 900 } });
       const page = await context.newPage();
       try {
         if (!(await signIn(page))) { failed++; continue; }
+        await saveSession(LOGIN.n, context);
         const pages = await readPortal(page, i + 1);
         pages.forEach(p => { p.account = i + 1; all.push(p); });
       } finally { await context.close(); }

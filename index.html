@@ -309,6 +309,10 @@ textarea.inp{min-height:84px;resize:vertical}
 .drow .dd{flex:1 1 140px;min-width:0}
 .drow .dk{flex:0 0 84px}
 .drow .dst{flex:0 0 112px}
+.epcode{margin:12px auto 0;max-width:1200px;width:calc(100% - 32px);background:var(--st-available);color:var(--st-available-fg);border-radius:12px;padding:12px 14px;display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
+.epcode span{flex:1 1 260px;font-size:14px}
+.epcode form{display:flex;gap:8px}
+.epcode .inp{width:140px;font-size:18px;letter-spacing:.15em;text-align:center}
 .justin{border:2px solid var(--accent);border-radius:14px;padding:4px 12px 12px;margin-bottom:10px;background:var(--accent-soft)}
 .justin > .wk{margin:12px 0 2px}
 .justin > p.src{margin:0 0 10px !important}
@@ -1193,6 +1197,26 @@ document.addEventListener("pointermove", e => {
 });
 
 /* ================= boot: Firebase sign-in and live sync ================= */
+/* EP asks the robot for a verification code: type it here and the robot carries on */
+function showEpCode(d){
+  let box = document.getElementById("epcode");
+  const waiting = d && d.status === "waiting" && !d.code && Date.now() - new Date(d.askedAt).getTime() < 8 * 60 * 1000;
+  if (!waiting){ if (box) box.remove(); return; }
+  if (!box){
+    box = document.createElement("section"); box.id = "epcode"; box.className = "epcode";
+    main.parentNode.insertBefore(box, main);
+    box.innerHTML = `<b>EP sign-in code needed</b><span>EP just sent you a code (by email or text). Type it here so the robot can read your EP portal.</span>
+      <form id="epcodeForm"><input class="inp" id="epcodeIn" inputmode="numeric" autocomplete="one-time-code" placeholder="Code" maxlength="10" required><button class="btn primary" type="submit">Send code</button></form>`;
+    box.querySelector("form").addEventListener("submit", async ev => {
+      ev.preventDefault();
+      const code = box.querySelector("#epcodeIn").value.trim();
+      if (!code) return;
+      try { await S.db.collection("ep").doc("code").update({ code, sentAt: new Date().toISOString() }); toast("Code sent to the robot"); box.remove(); }
+      catch (e) { writeFailed(e); }
+    });
+    box.querySelector("#epcodeIn").focus();
+  }
+}
 function setSync(state, text){ const s = $("#sync"); s.className = "sync " + state; s.lastElementChild.textContent = text; }
 function showLogin(msg){
   setSync("", "Signed out");
@@ -1253,6 +1277,8 @@ function showLogin(msg){
     S.userEmail = user.email;
     $("#addBtn").hidden = false; $("#exportBtn").hidden = false;
     main.innerHTML = `<div class="empty"><h2>Loading your calls</h2></div>`;
+    // EP sign-in code: when the EP robot asks, a yellow box appears at the top
+    db.collection("ep").doc("code").onSnapshot(d => showEpCode(d.exists ? d.data() : null), () => {});
     unsub = db.collection("calls").onSnapshot({includeMetadataChanges: true}, snap => {
       S.calls = new Map(snap.docs.map(d => [d.id, tidy({id: d.id, ...d.data()})]));
       S.loaded = true;
