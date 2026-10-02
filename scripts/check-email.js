@@ -686,7 +686,7 @@ async function findEmails(words) {
           report("notice", `Find · account ${i + 1} · ${folder}`, [
             "arrived " + londonDate(mail.date),
             "sender is a known agency: " + (isFromCastingAgency(from.name, from.address, knownAgencies) ? "yes" : "NO"),
-            "type: " + (classifyEmail(env.subject || "", text) || "not a call"),
+            "type: " + (classifyEmail(env.subject || "", text, isFromCastingAgency(from.name, from.address, knownAgencies)) || "not a call"),
             "robot has seen it: " + (seen.exists ? "yes" : "no"),
             "call in the app: " + (inApp ? "yes" : (callId ? "it was deleted" : "no")),
             "production name found: " + (r.project ? "yes" : "no"),
@@ -759,7 +759,15 @@ async function checkFolder(client, account, counts, folder, collect) {
 
   // 1) read only the envelopes (sender, subject, ID) of recent emails: small and fast
   const candidates = [];
-  for await (const msg of client.fetch({ since: since }, { envelope: true, uid: true })) {
+  // big folders: ask for the list of emails first, then read their envelopes 200 at a time
+  // (one huge request can be cut off by Yahoo part-way through)
+  const uids = (await client.search({ since: since }, { uid: true })) || [];
+  const batches = [];
+  for (let i = 0; i < uids.length; i += 200) batches.push(uids.slice(i, i + 200));
+  const envelopes = async function* () {
+    for (const b of batches) for await (const msg of client.fetch(b.join(","), { envelope: true, uid: true }, { uid: true })) yield msg;
+  };
+  for await (const msg of envelopes()) {
     counts.looked++;
     const env = msg.envelope || {};
     const from = (env.from && env.from[0]) || {};
@@ -821,7 +829,7 @@ async function checkFolder(client, account, counts, folder, collect) {
       date: mail.date ? new Date(mail.date).getTime() : 0,
       received: londonDate(mail.date), account,
     };
-    if (collect) collect.push(item);
+    if (collect) { if (!collect.some(x => x.key === key)) collect.push(item); }
     else await handleMail(item, account, counts, false);
   }
 }
@@ -829,7 +837,7 @@ async function checkFolder(client, account, counts, folder, collect) {
 // work out what one email means and update the schedule
 async function handleMail(m, account, counts, rereading) {
   const { key, seenRef, subject, text, html, from, received } = m;
-  const kind = classifyEmail(subject, text);
+  const kind = classifyEmail(subject, text, isFromCastingAgency(from.name, from.address, knownAgencies));
   if (!kind) {
     if (!m.seen) await seenRef.set({ at: new Date().toISOString(), call: null });
     counts.notACall++;

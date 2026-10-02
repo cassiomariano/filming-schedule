@@ -125,9 +125,9 @@
   // ---------- is this email an availability check? ----------
   // Words in a SUBJECT that mean "this is not a new availability check"
   // (thank-you notes, reviews, invitations, reminders, payments, bookings...)
-  var NOT_A_CALL = /thank|review|invit|reminder|newsletter|survey|feedback|payment|paid|invoice|remittance|timesheet|call ?sheet|password|verify|welcome|receipt|profile|update your|your (account|details)|confirm|booked|booking|released|release|cancel|unavailable|no longer/i;
+  var NOT_A_CALL = /thank|review|invit|reminder|newsletter|survey|feedback|payment|paid|invoice|remittance|timesheet|call ?sheet|password|verify|welcome|receipt|profile|update your|your (account|details)|confirm(?! (your |my )?availab)|booked|booking|released|release|cancel|unavailable|no longer/i;
   // Phrases that only appear in real availability checks
-  var CALL_PHRASES = /availability (enquiry|request|check)|\bav ?check|\bavail\.? ?check|are you (free|available)|who'?s available|put you forward|1st option|2nd option|first option|pencil(led)? (you|for)|let us know (if|who)[^.]{0,40}availab/i;
+  var CALL_PHRASES = /availability (enquiry|request|check)|confirm (your |my )?availab|\bav ?check|\bavail\.? ?check|are you (free|available)|who'?s available|put you forward|1st option|2nd option|first option|pencil(led)? (you|for)|let us know (if|who)[^.]{0,40}availab/i;
 
   function isAvailabilityCheck(subject, text) {
     var subj = subject || "";
@@ -219,7 +219,11 @@
   //   "replied"  the agency confirming your answer -> marks the call Available or Declined
   //   "calltime" call time / call sheet details -> adds the call time and place to that day
   //   null       anything else             -> ignored
-  function classifyEmail(subject, text) {
+  // Agents writing personally ("Supporting artist required – 23rd June, let me know"): from a known
+  // agency + a date + wording like this counts as an availability check
+  var CALL_LOOSE = /\b(supporting |background )?artists?\b|\bSAs?\b|\bextras?\b|required|looking for|needed|wanted|let me know|are you around|can you (do|make|work)|would you be|casting for|interested in/i;
+  var HAS_DATE = new RegExp("\\b\\d{1,2}(st|nd|rd|th)?\\s*(of\\s+)?" + "(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|(mon|tue|wed|thu|fri|sat|sun)[a-z]*\\s+\\d{1,2}\\b|\\b\\d{1,2}[/.]\\d{1,2}([/.]\\d{2,4})?\\b", "i");
+  function classifyEmail(subject, text, fromAgency) {
     var subj = subject || "";
     // releases and bookings first: they often start with "Thank you for being available..."
     if (/you have (new )?booking updates?/i.test(subj)) return "epupdate";        // EP: "You have booking updates on …"
@@ -233,7 +237,10 @@
     // the agency confirming YOUR reply ("Thank you for letting us know that you are available")
     if (/thank you for (letting us know|responding|your (response|reply)|being (un)?available|confirming)/i.test(subj)) return "replied";
     if (/thank|review|invit|newsletter|survey|payment|invoice/i.test(subj)) return null;
-    return isAvailabilityCheck(subj, text) ? "call" : null;
+    if (isAvailabilityCheck(subj, text)) return "call";
+    var top2 = String(text || "").slice(0, 3000);
+    if (fromAgency && !NOT_A_CALL.test(subj) && CALL_LOOSE.test(subj + "\n" + top2) && HAS_DATE.test(subj + "\n" + top2)) return "call";
+    return null;
   }
 
   // ---------- find a labelled value, e.g. "Project: Army Of Shadows" ----------
