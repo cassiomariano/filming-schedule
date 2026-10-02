@@ -40,6 +40,8 @@ jobs:
           EP_PASSWORD_2: ${{ secrets.EP_PASSWORD_2 }}
           ET_EMAIL_1: ${{ secrets.ET_EMAIL_1 }}
           ET_EMAIL_2: ${{ secrets.ET_EMAIL_2 }}
+          EP_TOTP_1: ${{ secrets.EP_TOTP_1 }}
+          EP_TOTP_2: ${{ secrets.EP_TOTP_2 }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           YAHOO_EMAIL_1: ${{ secrets.YAHOO_EMAIL_1 }}

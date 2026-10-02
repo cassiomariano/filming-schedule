@@ -67,8 +67,24 @@ async function describeForm(page) {
 async function isCodeScreen(page) {
   return page.evaluate(() => /verification code|one-time|passcode|security code|enter (the )?code|we('ve| have) sent|sent a code/i.test(document.body.innerText));
 }
+// Authenticator-app code (like Google Authenticator), made from the setup key you saved as
+// the secret EP_TOTP_1 / EP_TOTP_2 — the standard 6-digit, 30-second code (RFC 6238)
+function totp(secret) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const clean = String(secret).toUpperCase().replace(/[^A-Z2-7]/g, "");
+  let bits = "";
+  for (const ch of clean) bits += alphabet.indexOf(ch).toString(2).padStart(5, "0");
+  const key = Buffer.from((bits.match(/.{8}/g) || []).map(b => parseInt(b, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+  const h = crypto.createHmac("sha1", key).update(counter).digest();
+  const o = h[h.length - 1] & 15;
+  return String(((h.readUInt32BE(o) & 0x7fffffff) % 1000000)).padStart(6, "0");
+}
 // the code: typed by you in the app (database "ep/code"), or found in an EP email in your Yahoo inbox
 async function waitForCode(n) {
+  const key = process.env["EP_TOTP" + (n === "_0" ? "" : n)];
+  if (key) { report("notice", "EP code", "Made the code from the authenticator key."); return totp(key); }
   const ref = db.collection("ep").doc("code");
   const askedAt = new Date().toISOString();
   await ref.set({ status: "waiting", account: n, askedAt, code: "" });
