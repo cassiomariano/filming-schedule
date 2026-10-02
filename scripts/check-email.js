@@ -1012,10 +1012,12 @@ async function handleMail(m, account, counts, rereading) {
     const n = await mergeDuplicates();
     // remove far-away dates an older reader picked up from page footers (e.g. "Fri 18 Jun" next year)
     let odd = 0;
+    const far = new Date(Date.now() + 210 * 864e5).toISOString().slice(0, 10);
+    const near = (a, b) => Math.abs(new Date(a) - new Date(b)) <= 60 * 864e5;
     for (const c of existingCalls) {
-      if (!String(c.source || "").startsWith("email") || !c.received) continue;
-      const lim = new Date(new Date(c.received + "T12:00:00Z").getTime() + 210 * 864e5).toISOString().slice(0, 10);
-      const keep = (c.dates || []).filter(e => e.d <= lim || e.callTime || e.state === "worked");
+      const ds = c.dates || [];
+      // a lonely date more than 7 months away (no other day of the job near it, not worked, no call time)
+      const keep = ds.filter(e => e.d <= far || e.callTime || e.state === "worked" || ds.some(o => o !== e && near(o.d, e.d)));
       if (keep.length !== (c.dates || []).length) {
         odd += c.dates.length - keep.length;
         await db.collection("calls").doc(c.id).update({ dates: keep });
