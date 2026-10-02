@@ -204,7 +204,10 @@ async function signIn(page) {
           const inputs = [...document.querySelectorAll("input")].filter(i => i.type !== "hidden").map(i => i.type + (i.name ? ":" + i.name : "") + (i.id ? "#" + i.id : ""));
           const buttons = [...document.querySelectorAll("button, input[type=submit], a")].map(b => (b.innerText || b.value || "").trim().slice(0, 25)).filter(Boolean).slice(0, 10);
           const words = ["authenticat", "passcode", "pingid", "push", "approve", "another", "other", "method", "expired", "timed out", "denied", "error", "blocked", "device", "phone", "desktop", "not paired", "sms", "text"].filter(w => t.includes(w));
-          return `inputs [${inputs.join(", ")}] buttons [${buttons.join(" | ")}] words [${words.join(", ")}]`;
+          // the page's short message (error pages are generic); emails and numbers masked
+          const msg = (document.body && document.body.innerText || "").replace(/\S+@\S+/g, "[email]").replace(/\d/g, "#").replace(/\s+/g, " ").trim().slice(0, 220);
+          const forms = [...document.forms].map(f => { try { return new URL(f.action, location.href).host + new URL(f.action, location.href).pathname.replace(/[0-9a-f-]{16,}/gi, "…"); } catch (e) { return "?"; } });
+          return `inputs [${inputs.join(", ")}] buttons [${buttons.join(" | ")}] forms [${forms.join(", ")}] message "${msg}"`;
         }).catch(() => "unreadable");
         parts.push(d);
       }
