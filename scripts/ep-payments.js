@@ -24,8 +24,16 @@ function login() {
   const vals = set.map(n => ({ n, v: process.env[n].trim() }));
   const email = vals.find(x => /EMAIL/.test(x.n) && x.v.includes("@"));
   const pass = vals.find(x => /PASSWORD/.test(x.n) && x !== email) || vals.find(x => x !== email && !x.v.includes("@"));
-  if (email && pass) report("notice", "EP login", `email from ${email.n}, password from ${pass.n}`);
-  return email && pass ? { email: email.v, password: pass.v } : null;
+  // one or two EP accounts: EP_EMAIL_1 + EP_PASSWORD_1, EP_EMAIL_2 + EP_PASSWORD_2
+  const out = [];
+  for (const sfx of ["", "_1", "_2"]) {
+    const e = (process.env["EP_EMAIL" + sfx] || process.env["ET_EMAIL" + sfx] || "").trim();
+    const p = (process.env["EP_PASSWORD" + sfx] || "").trim();
+    if (e && p && e.includes("@")) out.push({ email: e, password: p, n: sfx || "_0" });
+  }
+  if (!out.length && email && pass) out.push({ email: email.v, password: pass.v, n: "_x" });
+  report("notice", "EP login", `${out.length} EP account(s) to read`);
+  return out.length ? out : null;
 }
 
 // what the sign-in page looks like (field types and button words only, nothing personal)
@@ -43,10 +51,12 @@ async function describeForm(page) {
 
 async function signIn(page) {
   await page.goto(PORTAL + "/my/payments", { waitUntil: "domcontentloaded", timeout: 60000 });
-  // EP sends you to its sign-in site (auth.ep.com); some pages have a "Log In" link first
+  // the "Log In" link goes to EP's sign-in site (auth.ep.com); follow its address directly
   if (page.url().startsWith(PORTAL)) {
-    const login = page.locator("a:has-text('Log In'), a:has-text('Login'), a:has-text('Sign in')").first();
-    if (await login.count()) await Promise.all([page.waitForLoadState("domcontentloaded"), login.click()]);
+    const hrefs = await page.$$eval("a[href*='auth.ep.com']", as => as.map(a => a.href));
+    const signin = hrefs.find(h => !/register|reset|forgot|password/i.test(h)) || hrefs[0] ||
+      "https://auth.ep.com/as/authorize?client_id=02cc3685-34ab-413d-b80c-19c939bdeb88&response_type=code&scope=ep+openid&redirect_uri=https%3A%2F%2Fuk.epcastingportal.com%2Foauth%2Fep%2Fcallback%3Fsite_id%3D1";
+    await page.goto(signin, { waitUntil: "networkidle", timeout: 60000 });
   }
   await page.waitForTimeout(3000);
   report("notice", "EP sign-in page", `on ${new URL(page.url()).host} · ${await describeForm(page)}`);
@@ -74,48 +84,62 @@ async function signIn(page) {
 }
 
 (async () => {
-  LOGIN = login();
-  if (!LOGIN) {
+  const logins = login();
+  if (!logins) {
     report("error", "EP", "Need two secrets: your EP email and your EP password (SETUP.md, 'EP portal').");
     process.exit(1);
   }
   const browser = await chromium.launch();
-  const page = await browser.newPage({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36" });
+  const all = [];
+  let failed = 0;
   try {
-    if (!(await signIn(page))) process.exit(1);
-    // Every section in the menu, read-only: open the page, never press a button or send a form.
-    const SECTIONS = ["/my/dashboard", "/my/diary", "/my/payments", "/my/schedule", "/my/contracts", "/my/job-review", "/my/inbox", "/my/profiles"];
-    const pages = [];
-    const seen = new Set();
-    const read = async url => {
-      if (seen.has(url) || !url.startsWith(PORTAL + "/my/") || /logout|sign-?out|delete|remove|edit|respond|reply|accept|decline/i.test(url)) return null;
-      seen.add(url);
+    for (let i = 0; i < logins.length; i++) {
+      LOGIN = logins[i];
+      const context = await browser.newContext({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36", viewport: { width: 1366, height: 900 } });
+      const page = await context.newPage();
       try {
-        await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
-        const p = { url: page.url(), html: await page.content(), text: await page.innerText("body") };
-        pages.push(p);
-        return p;
-      } catch (e) { return null; }
-    };
-    // the menu itself tells us the real addresses
-    const menu = [...new Set(await page.$$eval("nav a[href], header a[href]", as => as.map(a => a.href)))].filter(u => u.startsWith(PORTAL + "/my"));
-    const sections = [...new Set([...menu, ...SECTIONS.map(x => PORTAL + x)])];
-    const counts = {};
-    for (const url of sections) {
-      const p = await read(url);
-      if (!p) continue;
-      // one level deeper: each payment, contract and inbox message (up to 120 each)
-      const sub = [...new Set(await page.$$eval("a[href]", as => as.map(a => a.href)))]
-        .filter(u => u.startsWith(url.replace(/\/$/, "") + "/") && u !== url);
-      for (const u of sub.slice(0, 120)) await read(u);
-      counts[new URL(url).pathname] = 1 + sub.slice(0, 120).length;
+        if (!(await signIn(page))) { failed++; continue; }
+        const pages = await readPortal(page, i + 1);
+        pages.forEach(p => { p.account = i + 1; all.push(p); });
+      } finally { await context.close(); }
     }
-    report("notice", "EP portal", `Signed in. Pages read: ${Object.entries(counts).map(([k, v]) => k + " " + v).join(", ")}.`);
-    if (process.env.EP_EXPORT === "true") {
-      const box = seal(fs.readFileSync(__dirname + "/export-key.pem", "utf8"), { at: new Date().toISOString(), pages });
+    if (process.env.EP_EXPORT === "true" && all.length) {
+      const box = seal(fs.readFileSync(__dirname + "/export-key.pem", "utf8"), { at: new Date().toISOString(), pages: all });
       fs.writeFileSync("export.sealed.json", JSON.stringify(box));
     }
   } finally {
     await browser.close();
   }
+  if (failed === logins.length) process.exit(1);
 })().catch(e => { report("error", "EP", "Stopped: " + (e.name || "error") + " " + String(e.message || "").split("\n")[0].slice(0, 160)); process.exit(1); });
+
+// Every section in the menu, read-only: open the page, never press a button or send a form.
+async function readPortal(page, n) {
+  const SECTIONS = ["/my/dashboard", "/my/diary", "/my/payments", "/my/schedule", "/my/contracts", "/my/job-review", "/my/inbox", "/my/profiles"];
+  const pages = [];
+  const seen = new Set();
+  const read = async url => {
+    if (seen.has(url) || !url.startsWith(PORTAL + "/my") || /logout|sign-?out|delete|remove|edit|respond|reply|accept|decline|withdraw|cancel/i.test(url)) return null;
+    seen.add(url);
+    try {
+      await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
+      const p = { url: page.url(), html: await page.content(), text: await page.innerText("body") };
+      pages.push(p);
+      return p;
+    } catch (e) { return null; }
+  };
+  const menu = [...new Set(await page.$$eval("nav a[href], header a[href]", as => as.map(a => a.href)))].filter(u => u.startsWith(PORTAL + "/my"));
+  const sections = [...new Set([...menu, ...SECTIONS.map(x => PORTAL + x)])];
+  const counts = {};
+  for (const url of sections) {
+    const p = await read(url);
+    if (!p) continue;
+    // one level deeper: each payment, contract and inbox message (up to 120 each)
+    const sub = [...new Set(await page.$$eval("a[href]", as => as.map(a => a.href)))]
+      .filter(u => u.startsWith(url.replace(/\/$/, "") + "/") && u !== url);
+    for (const u of sub.slice(0, 120)) await read(u);
+    counts[new URL(url).pathname] = 1 + sub.slice(0, 120).length;
+  }
+  report("notice", "EP portal " + n, `Signed in. Pages read: ${Object.entries(counts).map(([k, v]) => k + " " + v).join(", ")}.`);
+  return pages;
+}
