@@ -27,6 +27,14 @@ on:
         description: "Re-read everything: all folders, oldest first, work out each job's status again (no phone alerts)"
         type: boolean
         default: false
+      export:
+        description: "Private export (sealed) to the vault branch"
+        type: boolean
+        default: false
+      patch:
+        description: "Apply the sealed fixes in patch.sealed.json"
+        type: boolean
+        default: false
       survey:
         description: "Count words in agency email subjects (counts only)"
         type: boolean
@@ -44,6 +52,8 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write             # only used to put a sealed export on the "vault" branch
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v5
@@ -60,6 +70,8 @@ jobs:
           TEST_ALERT: ${{ github.event.inputs.test_alert || 'false' }}
           FIND: ${{ github.event.inputs.find || '' }}
           REBUILD: ${{ github.event.inputs.rebuild || 'false' }}
+          EXPORT: ${{ github.event.inputs.export || 'false' }}
+          PATCH: ${{ github.event.inputs.patch || 'false' }}
           SURVEY: ${{ github.event.inputs.survey || 'false' }}
           PORTAL_DEBUG: ${{ github.event.inputs.portal_debug == 'true' && 'yes' || '' }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
@@ -67,3 +79,10 @@ jobs:
           YAHOO_APP_PASSWORD_1: ${{ secrets.YAHOO_APP_PASSWORD_1 }}
           YAHOO_EMAIL_2: ${{ secrets.YAHOO_EMAIL_2 }}
           YAHOO_APP_PASSWORD_2: ${{ secrets.YAHOO_APP_PASSWORD_2 }}
+      - name: Put the sealed export on the vault branch
+        if: ${{ github.event.inputs.export == 'true' }}
+        run: |
+          mkdir /tmp/v && cp export.sealed.json /tmp/v/
+          cd /tmp/v && git init -q -b vault && git add export.sealed.json
+          git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -q -m "sealed export"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" vault

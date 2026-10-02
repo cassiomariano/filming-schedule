@@ -1007,6 +1007,42 @@ async function handleMail(m, account, counts, rereading) {
   }
 
   if (process.env.FIND) { await findEmails(process.env.FIND); process.exit(0); }
+
+  // Private export: the whole schedule, sealed with the key in scripts/export-key.pem
+  // (only its owner can open it). The workflow puts the sealed file on the "vault" branch.
+  if (process.env.EXPORT === "true") {
+    const { seal } = require("./vault.js");
+    const snap = await db.collection("calls").get();
+    const calls = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // the robot's own public key, so fixes can be sealed for the robot only
+    const robotKey = crypto.createPublicKey(serviceAccount.private_key).export({ type: "spki", format: "pem" });
+    const box = seal(require("fs").readFileSync(__dirname + "/export-key.pem", "utf8"), { at: new Date().toISOString(), robotKey, calls });
+    require("fs").writeFileSync("export.sealed.json", JSON.stringify(box));
+    report("notice", "Export", `Sealed ${calls.length} calls.`);
+    process.exit(0);
+  }
+
+  // Private fixes: patch.sealed.json (sealed for the robot's key) lists changes to make
+  if (process.env.PATCH === "true") {
+    const { open } = require("./vault.js");
+    const ops = open(serviceAccount.private_key, JSON.parse(require("fs").readFileSync("patch.sealed.json", "utf8")));
+    const ALLOWED = new Set(["project", "agency", "role", "status", "dates", "location", "fitLocation", "filmLocation", "rate", "notes",
+      "respondBy", "received", "review", "reviewReason", "newInfo", "newInfoText", "attention", "emails", "links", "answers"]);
+    const n = { update: 0, delete: 0, create: 0, skipped: 0 };
+    for (const o of ops) {
+      const ref = db.collection("calls").doc(String(o.id || ""));
+      if (!o.id) { n.skipped++; continue; }
+      if (o.op === "delete") { await ref.delete(); n.delete++; continue; }
+      const body = {};
+      Object.entries(o.set || o.data || {}).forEach(([k, v]) => { if (ALLOWED.has(k)) body[k] = v; });
+      body.updatedAt = new Date().toISOString();
+      if (o.op === "create") { await ref.set({ createdAt: body.updatedAt, source: "fix", ...body }); n.create++; }
+      else if (o.op === "update") { if ((await ref.get()).exists) { await ref.update(body); n.update++; } else n.skipped++; }
+      else n.skipped++;
+    }
+    report("notice", "Fixes", `Updated ${n.update}, created ${n.create}, deleted ${n.delete}, skipped ${n.skipped}.`);
+    process.exit(0);
+  }
   if (REBUILD || process.env.CLEANUP === "true") {
     report("notice", "Agencies", `${knownAgencies.length} known agency names.`);
     const n = await mergeDuplicates();
