@@ -308,6 +308,12 @@ textarea.inp{min-height:84px;resize:vertical}
 .drow .dd{flex:1 1 140px;min-width:0}
 .drow .dk{flex:0 0 84px}
 .drow .dst{flex:0 0 112px}
+.newinfo{font-size:11.5px;font-weight:700;color:var(--accent);margin-left:6px;white-space:nowrap}
+.mails{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.mails details{border:1px solid var(--line);border-radius:8px;background:var(--surface-2);padding:6px 10px}
+.mails summary{cursor:pointer;font-size:13px}
+.mails summary .k{font-family:var(--f-mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;border-radius:4px;padding:1px 5px;margin-right:6px;background:var(--line)}
+.dst-pending{border-style:dashed}
 .dst-available{background:var(--st-available);color:var(--st-available-fg)}
 .drow .dow{font-family:var(--f-mono);font-size:12px;font-weight:600;min-width:30px;text-align:center}
 .dst-worked{background:var(--st-done);color:var(--st-done-fg)}
@@ -444,11 +450,12 @@ function normAgency(a){ const s = (a||"").trim(); const k = s.toLowerCase().repl
 
 /* the status of ONE day: a single day can be released, canceled or worked
    even when the rest of the booking is still on */
-const DAY_STATES = [["", "Same as the call"], ["available", "Available (on hold)"], ["worked", "Worked"], ["released", "Released"], ["canceled", "Canceled"]];
+const DAY_STATES = [["", "Same as the call"], ["pending", "New (not answered)"], ["available", "Available (on hold)"], ["worked", "Worked"], ["released", "Released"], ["canceled", "Canceled"]];
 function dayStatus(c, e){
   if (e.state === "released") return "released";
   if (e.state === "canceled") return "canceled";
-  if (e.state === "available") return "available";       // production kept this day as "available / on hold"
+  if (e.state === "available") return "available";
+  if (e.state === "pending") return "pending";           // a day added by a later email, not answered yet       // production kept this day as "available / on hold"
   if (e.state === "worked" || e.done) return "done";
   return c.status;
 }
@@ -728,7 +735,7 @@ function upCard(c, cl){
     <div class="uphead" data-open="${c.id}" role="button" tabindex="0">
       <span class="upst ${clsS(c.status)}">${esc(MEANS[c.status]||c.status)}</span>
       <h4>${esc(nameOf(c))}</h4>
-      <div class="upmeta">${outsideBadge(c.location || c.filmLocation || c.fitLocation || (c.dates||[]).map(e=>e.loc).find(Boolean) || "")} ${esc([c.agency, c.role].filter(Boolean).join(" · "))}${du?` · <b class="due${du.late?" late":""}">${esc(du.txt)}</b>`:""}${c.review?` · <b style="color:var(--accent)">check details</b>`:""}</div>
+      <div class="upmeta">${outsideBadge(c.location || c.filmLocation || c.fitLocation || (c.dates||[]).map(e=>e.loc).find(Boolean) || "")} ${esc([c.agency, c.role].filter(Boolean).join(" · "))}${du?` · <b class="due${du.late?" late":""}">${esc(du.txt)}</b>`:""}${c.review?` · <b style="color:var(--accent)">check details</b>`:""}${c.newInfo?` <span class="newinfo" title="${esc(c.newInfoText||"")}">● Updated</span>`:""}</div>
     </div>
     ${line("fit")}${line("reh")}${line("film")}
     ${(c.answers||[]).length ? `<details class="answers"><summary>Your answers on the agency page</summary><ul>${c.answers.map(a => `<li>${esc(a)}</li>`).join("")}</ul></details>` : ""}
@@ -773,7 +780,7 @@ function renderCalls(){
     const shown = ds.slice(0, 40);
     h += `<article class="row"><span class="stripe ${clsS(c.status)}"></span>
       <div class="body" data-open="${c.id}" role="button" tabindex="0">
-        <div class="line1"><span class="proj">${esc(nameOf(c))}</span><span class="pill ${clsS(c.status)}">${SMAP[c.status]?.short||c.status}</span>${c.attention?`<span class="flag">● Attention</span>`:""}</div>
+        <div class="line1"><span class="proj">${esc(nameOf(c))}</span><span class="pill ${clsS(c.status)}">${SMAP[c.status]?.short||c.status}</span>${c.attention?`<span class="flag">● Attention</span>`:""}${c.newInfo?`<span class="newinfo" title="${esc(c.newInfoText||"")}">● Updated${c.newInfoText?" – "+esc(c.newInfoText):""}</span>`:""}</div>
         <div class="meta">${c.agency?`<span><b>${esc(c.agency)}</b></span>`:""}${c.role?`<span>${esc(c.role)}</span>`:""}${(c.location||c.filmLocation)?`<span>📍 ${esc(c.location||c.filmLocation)}</span>`:""}${c.received?`<span>Received ${fmtDM(c.received)}</span>`:""}</div>
         ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"; return `<button type="button" class="dchip ${clsS(st)} ${e.kind}${off?" off":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${kindName(e.kind)} · ${SMAP[st].short} · ${DAY_TIP}">${e.kind!=="film"?kindLetter(e.kind)+" ":""}${fmtDay(e.d)}${e.night?" ☾":""}${st==="done"?" ✓":""}</button>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
         ${du?`<span class="due${du.late?" late":""}">${esc(du.txt)}</span>`:""}
@@ -892,9 +899,18 @@ function blankCall(){ return {project:"", agency:"", role:"", status:"pending", 
 function openEditor(id, preset){
   draftId = id || null; confirmDel = false; openLoc = new Set();
   draft = structuredClone(preset || (id ? S.calls.get(id) : blankCall()));
+  if (id && draft.newInfo && S.canWrite !== false){ S.db.collection("calls").doc(id).update({newInfo: false}).catch(() => {}); draft.newInfo = false; }
   delete draft.id;
   draft.dates = (draft.dates||[]).slice().sort((a,b)=>a.d.localeCompare(b.d));
   drawEditor();
+}
+/* every email about this job, newest first, so you can check what the robot read */
+const MAIL_KIND = {call:"Availability check", booked:"Booking", released:"Release", replied:"Answer received", calltime:"Call time", epupdate:"EP update", merged:"Earlier copy"};
+function emailsHTML(d){
+  const list = (d.emails||[]).slice().sort((a,b) => String(b.date||"").localeCompare(String(a.date||"")));
+  if (!list.length) return d.rawEmail ? `<details class="more"><summary>Original email</summary><pre class="raw">${esc(d.rawEmail)}</pre></details>` : "";
+  return `<details class="more"><summary>Emails about this job <span class="src">${list.length}</span></summary><div class="mails">${list.map(m =>
+    `<details><summary><span class="k">${esc(MAIL_KIND[m.kind]||m.kind||"Email")}</span>${m.date?esc(fmtDay(m.date))+" · ":""}${esc(m.subject||"")}</summary><pre class="raw">${esc(m.text||"")}</pre></details>`).join("")}</div></details>`;
 }
 function closeSheet(){ layer.innerHTML = ""; draft = null; draftId = null; }
 function drawEditor(){
@@ -917,7 +933,7 @@ function drawEditor(){
           return `<div class="drow" data-i="${i}">
             <span class="dow" id="dw-${i}">${e.d ? DOW[(parse(e.d).getDay()+6)%7] : ""}</span><input class="inp dd" type="date" id="dd-${i}" value="${e.d}" aria-label="Date">
             <select class="inp dk" id="dk-${i}" aria-label="Fitting or shoot"><option value="film"${e.kind==="film"?" selected":""}>Shoot</option><option value="fit"${e.kind==="fit"?" selected":""}>Fit</option><option value="reh"${e.kind==="reh"?" selected":""}>Rehearsal</option></select>
-            <select class="inp dst dst-${st||"auto"}" id="dst-${i}" aria-label="What happened this day"><option value=""${st===""?" selected":""}>Auto</option><option value="available"${st==="available"?" selected":""}>Available</option><option value="worked"${st==="worked"?" selected":""}>Done ✓</option><option value="canceled"${st==="canceled"?" selected":""}>Canceled</option><option value="released"${st==="released"?" selected":""}>Released</option></select>
+            <select class="inp dst dst-${st||"auto"}" id="dst-${i}" aria-label="What happened this day"><option value=""${st===""?" selected":""}>Auto</option><option value="pending"${st==="pending"?" selected":""}>New</option><option value="available"${st==="available"?" selected":""}>Available</option><option value="worked"${st==="worked"?" selected":""}>Done ✓</option><option value="canceled"${st==="canceled"?" selected":""}>Canceled</option><option value="released"${st==="released"?" selected":""}>Released</option></select>
             <label class="ibtn" title="Night shoot"><input type="checkbox" id="dn-${i}" ${e.night?"checked":""}><span aria-hidden="true">☾</span><span class="sr">Night</span></label>
             <button type="button" class="ibtn${showLoc?" on":""}" data-showloc="${i}" title="Place and call time for this day" aria-label="Place and call time">📍</button>
             <button type="button" class="ibtn" data-deldate="${i}" title="Remove this date" aria-label="Remove date">✕</button>
@@ -938,7 +954,7 @@ function drawEditor(){
       </details>
       ${(d.answers||[]).length ? `<div class="fld"><span class="lbl">Your answers on the agency page</span><ul class="anslist">${d.answers.map(a => `<li>${esc(a)}</li>`).join("")}</ul></div>` : ""}
       ${draftId && (d.links||[]).length ? `<div class="fld"><span class="lbl">Agency reply links</span><div style="display:flex;gap:6px;flex-wrap:wrap">${d.links.map(l => `<a class="btn small" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.kind==="yes"?"✓ "+l.text:l.kind==="no"?"✕ "+l.text:"Reply to agency")} ↗</a>`).join("")}</div></div>` : ""}
-      ${d.rawEmail ? `<details class="more"><summary>Original email</summary><pre class="raw">${esc(d.rawEmail)}</pre></details>` : ""}
+      ${emailsHTML(d)}
       ${draftId ? `<div class="src">Source: ${esc(d.source||"")}${d.updatedAt?` · updated ${esc(d.updatedAt.slice(0,16).replace("T"," "))}`:""}</div>` : ""}
       ${confirmDel ? `<div class="confirm"><span>Delete this call for good?</span><button class="btn small danger" data-delyes>Delete</button><button class="btn small" data-delno>Keep</button></div>` : ""}
     </div>

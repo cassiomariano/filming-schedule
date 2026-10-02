@@ -50,7 +50,7 @@ function pickOne(list) {
   const rank = c => ({ confirmed: 4, available: 3, released: 2, pending: 1 }[c.status] || 0);
   return list.slice().sort((a, b) => rank(b) - rank(a) || String(b.received || "").localeCompare(String(a.received || "")))[0];
 }
-const stats = { booked: [0, 0, 0], released: [0, 0], replied: [0, 0], calltime: [0, 0], restored: 0, folders: 0 };
+const stats = { amended: 0, booked: [0, 0, 0], released: [0, 0], replied: [0, 0], calltime: [0, 0], restored: 0, folders: 0 };
 const accounts = [
   { email: process.env.YAHOO_EMAIL_1, password: process.env.YAHOO_APP_PASSWORD_1 },
   { email: process.env.YAHOO_EMAIL_2, password: process.env.YAHOO_APP_PASSWORD_2 },
@@ -279,6 +279,162 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
   c.status = status;
   await notifyPhone({ ...c, project: (kind === "booked" ? "BOOKED: " : "Released: ") + c.project });
   return c.id;
+}
+
+
+// ---------- one job = one call ----------
+// Same production? Names match, or one contains the other and the shorter is 6+ letters
+// ("Tea Time" and "TEA TIME (TV Series)").
+function closeName(a, b) {
+  const x = norm(a).trim(), y = norm(b).trim();
+  return !!x && !!y && (x === y || ((x.includes(y) || y.includes(x)) && Math.min(x.length, y.length) >= 6));
+}
+// the days a call covers, widened by 60 days, so a job from last year isn't mixed with this year's
+function span(c) {
+  const ds = (c.dates || []).map(e => e.d).filter(Boolean).sort();
+  const a = ds[0] || c.received || "", b = ds[ds.length - 1] || c.received || "";
+  if (!a) return null;
+  const shift = (d, n) => { const t = new Date(d + "T12:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+  return [shift(a, -60), shift(b, 60)];
+}
+function closeInTime(a, b) {
+  const x = span(a), y = span(b);
+  return !x || !y || (x[0] <= y[1] && y[0] <= x[1]);
+}
+const ACTIVE = ["pending", "available", "confirmed"];
+// the call this new email belongs to: same EP message, or same production + agency at around the same time
+function findTwin(call) {
+  const ep = portalLink(call);                     // the same EP message page = the same job
+  if (ep) {
+    const byPage = existingCalls.filter(c => c.id && portalLink(c) === ep);
+    if (byPage.length) return pickOne(byPage);
+  }
+  if (!call.project) return null;
+  const pool = existingCalls.filter(c => c.id && c.project && closeName(c.project, call.project) &&
+    (!c.agency || !call.agency || sameName(c.agency, call.agency)) && closeInTime(c, call));
+  const active = pool.filter(c => ACTIVE.includes(c.status));
+  if (active.length) return pickOne(active);
+  // a closed job (released, declined...): only a reminder with no new days counts as the same
+  const reminder = pool.filter(c => call.dates.length && call.dates.every(d => (c.dates || []).some(e => e.d === d.d)));
+  return reminder.length ? pickOne(reminder) : null;
+}
+// a later email about a job you already have: add only what's new (dates, missing details, links)
+async function amendCall(c, call) {
+  const dates = (c.dates || []).map(e => ({ ...e }));
+  const added = [];
+  (call.dates || []).forEach(x => {
+    const have = dates.find(e => e.d === x.d);
+    if (have) {
+      if (!have.loc && x.loc) have.loc = x.loc;
+      if (x.night) have.night = true;
+      if (x.kind === "reh" && have.kind === "film") have.kind = "reh";
+      return;
+    }
+    const { answer, hold, ...day } = x;
+    if (c.status !== "pending") day.state = "pending";   // a new day you haven't answered yet (white)
+    dates.push(day);
+    added.push(x.d);
+  });
+  dates.sort((a, b) => a.d.localeCompare(b.d));
+  const changes = { dates, updatedAt: new Date().toISOString() };
+  for (const k of ["role", "location", "fitLocation", "filmLocation", "rate"]) if (!c[k] && call[k]) changes[k] = call[k];
+  if (!c.project && call.project) changes.project = call.project;
+  if (added.length && call.respondBy && (!c.respondBy || call.respondBy > c.respondBy)) changes.respondBy = call.respondBy;
+  const urls = new Set((c.links || []).map(l => l.url));
+  const newLinks = (call.links || []).filter(l => !urls.has(l.url));
+  if (newLinks.length) changes.links = (c.links || []).concat(newLinks).slice(0, 20);
+  if ((call.answers || []).length && !(c.answers || []).length) changes.answers = call.answers;
+  const what = [added.length ? `${added.length} new date${added.length > 1 ? "s" : ""}` : "",
+                Object.keys(changes).some(k => ["role", "location", "rate", "respondBy"].includes(k)) ? "new details" : ""].filter(Boolean).join(" + ");
+  if (what) { changes.newInfo = true; changes.newInfoText = what + " from a later email"; }
+  await db.collection("calls").doc(c.id).update(changes);
+  Object.assign(c, changes);
+  stats.amended++;
+  if (added.length) await notifyPhone({ ...c, project: "Update: " + nameOfCall(c), dates: dates.filter(e => added.includes(e.d)) });
+  return c.id;
+}
+function nameOfCall(c) { return c.project || c.emailSubject || "a job"; }
+
+// every email about a job is kept on it (for checking): date, type, subject, text
+function emailRecord(m, kind) {
+  return { key: m.key, date: m.received, kind, subject: String(m.subject || "").slice(0, 200),
+           text: String(m.text || "").replace(/\n{3,}/g, "\n\n").slice(0, 2500) };
+}
+async function logEmail(callId, m, kind) {
+  if (!callId || !m || !m.key) return;
+  const c = (existingCalls || []).find(x => x.id === callId);
+  if (c && (c.emails || []).some(e => e.key === m.key)) return;
+  const rec = emailRecord(m, kind);
+  try {
+    await db.collection("calls").doc(callId).update({ emails: admin.firestore.FieldValue.arrayUnion(rec) });
+    if (c) c.emails = (c.emails || []).concat(rec);
+  } catch (e) { /* the call was deleted: nothing to log */ }
+}
+
+// Clean up: copies of the same job (same production + agency, around the same time) become one.
+// Your own entries are never deleted; robot copies are folded into the best one.
+async function mergeDuplicates() {
+  existingCalls = null;
+  await loadExistingCalls();
+  const rank = { confirmed: 6, done: 5, available: 4, pending: 3, released: 2, canceled: 2, declined: 2, expired: 1 };
+  const dayFor = { done: "worked", available: "available", pending: "pending", released: "released", canceled: "canceled", declined: "canceled", expired: "canceled" };
+  const used = new Set();
+  let merged = 0;
+  for (const a of existingCalls) {
+    if (used.has(a.id) || !a.project) continue;
+    const group = existingCalls.filter(b => !used.has(b.id) && b.project && closeName(a.project, b.project) &&
+      (!a.agency || !b.agency || sameName(a.agency, b.agency)) && closeInTime(a, b));
+    const robot = group.filter(g => String(g.source || "").startsWith("email"));
+    if (group.length < 2 || !robot.length) continue;
+    group.forEach(g => used.add(g.id));
+    const manual = group.filter(g => !String(g.source || "").startsWith("email"));
+    const byRank = (x, y) => (rank[y.status] || 0) - (rank[x.status] || 0) || String(x.received || "").localeCompare(String(y.received || ""));
+    const primary = (manual.length ? manual : group).slice().sort(byRank)[0];
+    const dups = robot.filter(g => g.id !== primary.id);
+    if (!dups.length) continue;
+    const members = [primary, ...dups];
+    const finalStatus = members.slice().sort(byRank)[0].status;
+    // days: each copy's days keep the colour they had
+    const dates = [];
+    members.forEach(mem => (mem.dates || []).forEach(e => {
+      if (dates.some(x => x.d === e.d)) return;
+      const day = { ...e };
+      if (!day.state && mem.status !== finalStatus && dayFor[mem.status]) day.state = dayFor[mem.status];
+      dates.push(day);
+    }));
+    dates.sort((x, y) => x.d.localeCompare(y.d));
+    const out = { dates, status: finalStatus, updatedAt: new Date().toISOString() };
+    for (const k of ["role", "location", "fitLocation", "filmLocation", "rate", "respondBy", "emailSubject", "emailFrom", "rawEmail"])
+      if (!primary[k]) { const v = dups.map(d => d[k]).find(Boolean); if (v) out[k] = v; }
+    const links = [], seenUrl = new Set();
+    members.forEach(mem => (mem.links || []).forEach(l => { if (!seenUrl.has(l.url)) { seenUrl.add(l.url); links.push(l); } }));
+    if (links.length) out.links = links.slice(0, 20);
+    const answers = [...new Set(members.flatMap(mem => mem.answers || []))];
+    if (answers.length) out.answers = answers.slice(0, 12);
+    const notes = [...new Set(members.map(mem => mem.notes).filter(Boolean))];
+    if (notes.length) out.notes = notes.join(" • ").slice(0, 2000);
+    // keep every email: the ones already logged + each copy's original email
+    const emails = [], seenKey = new Set();
+    members.forEach(mem => {
+      (mem.emails || []).forEach(e => { if (!seenKey.has(e.key)) { seenKey.add(e.key); emails.push(e); } });
+      if (mem.rawEmail && !(mem.emails || []).length && !seenKey.has("raw:" + mem.id)) {
+        seenKey.add("raw:" + mem.id);
+        const [subj, ...rest] = String(mem.rawEmail).split("\n\n");
+        emails.push({ key: "raw:" + mem.id, date: mem.received || "", kind: mem === primary ? "call" : "merged",
+                      subject: (mem.emailSubject || subj || "").slice(0, 200), text: rest.join("\n\n").slice(0, 2500) });
+      }
+    });
+    if (emails.length) out.emails = emails.slice(-40);
+    out.newInfo = true;
+    out.newInfoText = `${dups.length + 1} copies of this job merged into one`;
+    out.review = false; out.reviewReason = "";
+    await db.collection("calls").doc(primary.id).update(out);
+    for (const d of dups) await db.collection("calls").doc(d.id).delete();
+    merged += dups.length;
+  }
+  existingCalls = null;
+  await loadExistingCalls();
+  return merged;
 }
 
 // a new call from an email
@@ -668,7 +824,11 @@ async function handleMail(m, account, counts, rereading) {
   if (m.seen && rereading) counts.alreadySeen++;
   const r = parseEmail({ subject, fromName: from.name, fromEmail: from.address, text, received });
   if (kind !== "call") { await loadExistingCalls(); knownName(r, subject, text); }
-  const remember = id => seenRef.set({ at: new Date().toISOString(), call: id || (m.seen && m.seen.call) || null, kind });
+  const remember = async id => {
+    const callId = id || (m.seen && m.seen.call) || null;
+    await seenRef.set({ at: new Date().toISOString(), call: callId, kind });
+    await logEmail(callId, { ...m, key }, kind);
+  };
 
   // EP "You have booking updates": open the EP page it links to and see what changed
   if (kind === "epupdate") {
@@ -734,28 +894,30 @@ async function handleMail(m, account, counts, rereading) {
   }
 
   // An availability check
+  await loadExistingCalls();
   if (m.seen) {
-    // re-read mode: bring back a request that is missing from the app, if its dates are still ahead
-    await loadExistingCalls();
+    // already handled before: just make sure the email is kept on its job
     const exists = m.seen.call && existingCalls.some(c => c.id === m.seen.call);
-    if (exists || m.trash || !r.dates.some(d => d.d >= londonDate())) return;
+    if (exists) { await logEmail(m.seen.call, { ...m, key }, kind); return; }
+    // re-read mode: a request missing from the app comes back only if its dates are still ahead
+    if (m.trash || !r.dates.some(d => d.d >= londonDate())) return;
   } else if (m.trash) {                                // old requests you deleted: don't add them back
     await remember(null);
     return;
   }
   const call = buildCall(r, { ...m, account });
-  if (m.seen) { call.review = true; call.reviewReason = "Found again while re-reading all your emails"; }
-  // the same job may arrive again (reminders, updates): flag it so you can merge or delete
-  await loadExistingCalls();
-  const twin = existingCalls.find(c => c.project && sameName(c.project, call.project) && sameName(c.agency, call.agency) &&
-                                       ["pending", "available", "confirmed"].includes(c.status));
-  if (twin) {
-    if (m.seen) return;
-    call.review = true;
-    call.reviewReason = (call.reviewReason ? call.reviewReason + ". " : "") + "You already have a call for this production from this agency";
-  }
-  const callId = "e" + key;
   await enrichFromPortal(call);                   // EP message page: real name, all dates, your answers
+  // the same job again (reminder, extra dates, notes): amend the call you already have
+  const twin = findTwin(call);
+  if (twin) {
+    const id = await amendCall(twin, call);
+    counts.updated++;
+    await remember(id);
+    return;
+  }
+  if (m.seen) { call.review = true; call.reviewReason = "Found again while re-reading all your emails"; }
+  const callId = "e" + key;
+  call.emails = [emailRecord({ ...m, key }, "call")];
   await db.collection("calls").doc(callId).set(call);
   await remember(callId);
   existingCalls.push({ id: callId, ...call });
@@ -843,6 +1005,10 @@ async function handleMail(m, account, counts, rereading) {
   }
 
   if (process.env.FIND) { await findEmails(process.env.FIND); process.exit(0); }
+  if (REBUILD || process.env.CLEANUP === "true") {
+    const n = await mergeDuplicates();
+    report("notice", "Duplicates", `Merged ${n} duplicate copies into their jobs.`);
+  }
   if (SURVEY) {
     for (const a of accounts) { try { await checkAccount(a); } catch (e) { report("warning", "Survey", "account skipped (" + (e.code || e.name) + ")"); } }
     const rows = Object.entries(survey).sort((a, b) => b[1] - a[1]).map(([k, v]) => k + " " + v);
@@ -888,7 +1054,7 @@ async function handleMail(m, account, counts, rereading) {
   if (epu.found) report("notice", "EP booking updates", `${epu.found} emails; page opened ${epu.opened}, needed a login ${epu.login}; said booked ${epu.booked}, released ${epu.released}, unclear ${epu.unclear}; matched to a job ${epu.matched}.`);
   if (REBUILD) report("notice", "Re-read everything", `Booking emails: ${stats.booked[0]} found, ${stats.booked[1]} matched to a job, ${stats.booked[2]} added as new booked jobs. ` +
     `Release emails: ${stats.released[0]} found, ${stats.released[1]} matched. Answer confirmations: ${stats.replied[0]} found, ${stats.replied[1]} matched. ` +
-    `Call times: ${stats.calltime[0]} found, ${stats.calltime[1]} matched. Requests brought back: ${stats.restored}. Old requests never answered (now "Expired"): ${stats.expired || 0}.`);
+    `Call times: ${stats.calltime[0]} found, ${stats.calltime[1]} matched. Requests brought back: ${stats.restored}. Jobs amended by later emails (instead of a new copy): ${stats.amended}. Old requests never answered (now "Expired"): ${stats.expired || 0}.`);
   try { await refreshPendingPortalPages(); } catch (e) { report("warning", "EP pages", "Could not refresh EP pages (" + (e.code || e.name) + ")."); }
   if (portal.read + portal.failed + portal.login) {
     if (process.env.PORTAL_DEBUG) report("notice", "EP page check", `pages: ${portal.read}; with "recorded your response": ${portal.recorded}; with answer buttons: ${portal.radios}; with ticked answers: ${portal.ticked}; mostly script (built in the browser): ${portal.scripts}; with dates found: ${portal.dated}; answer shapes: ${Object.entries(shapes).map(([k, v]) => k + " " + v).join(", ") || "none"}`);
