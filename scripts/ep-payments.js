@@ -57,9 +57,11 @@ async function describeForm(page) {
       .map(i => `${i.type}${i.name ? ":" + i.name : ""}${i.id ? "#" + i.id : ""}${i.offsetParent ? "" : "(hidden)"}`);
     const buttons = [...document.querySelectorAll("button, input[type=submit], a.button, a[role=button]")]
       .map(b => (b.innerText || b.value || "").trim().slice(0, 30)).filter(Boolean);
-    const flags = ["captcha", "verification code", "one-time", "authenticator", "text message", "remember"]
+    const heads = [...document.querySelectorAll("h1, h2, h3, .title, [class*=title]")].map(h => h.innerText.trim().slice(0, 50)).filter(Boolean).slice(0, 5);
+    const links = [...document.querySelectorAll("a, [role=link], [class*=link], li, .device, [class*=device], [class*=method]")].map(a => (a.innerText || "").trim().replace(/\s+/g, " ").slice(0, 40)).filter(t => t && t.length < 41).slice(0, 12);
+    const flags = ["captcha", "verification code", "one-time", "authenticator", "text message", "remember", "pingid", "push", "approve", "another method", "other", "passcode", "expired", "timed out", "denied", "error", "blocked", "device"]
       .filter(w => document.body.innerText.toLowerCase().includes(w));
-    return `inputs [${inputs.join(", ")}] · buttons [${buttons.join(" | ")}] · notes [${flags.join(", ")}]`;
+    return `headings [${heads.join(" | ")}] · inputs [${inputs.join(", ")}] · buttons [${buttons.join(" | ")}] · links [${[...new Set(links)].join(" | ")}] · notes [${flags.join(", ")}]`;
   });
 }
 
@@ -188,6 +190,36 @@ async function signIn(page) {
     }
     const handover = page.locator("button:has-text('Submit'):visible, input[type=submit][value*=Submit i]:visible").first();
     if (!page.url().startsWith(PORTAL) && (await handover.count()) && !(await pass().count())) await handover.click().catch(() => {});
+  }
+  // EP's second step (PingID): prefer the authenticator app, whose code the robot can make itself
+  if (!page.url().startsWith(PORTAL) && process.env["EP_TOTP" + LOGIN.n]) {
+    report("notice", "EP second step", await describeForm(page));
+    for (let step = 0; step < 4 && !page.url().startsWith(PORTAL); step++) {
+      const codeBox = page.locator("input[autocomplete=one-time-code]:visible, input[name*=otp i]:visible, input[id*=otp i]:visible, input[name*=code i]:visible, input[id*=code i]:visible, input[name*=passcode i]:visible, input[type=tel]:visible, input[type=number]:visible, input[type=text]:visible, input[type=password]:visible").first();
+      if (await codeBox.count()) {
+        // wait for a fresh 30-second window so the code doesn't expire while typing
+        if ((Date.now() / 1000) % 30 > 25) await page.waitForTimeout(6000);
+        await codeBox.fill(totp(process.env["EP_TOTP" + LOGIN.n]));
+        const go = page.locator("button:has-text('Verify'):visible, button:has-text('Sign On'):visible, button:has-text('Sign in'):visible, button:has-text('Submit'):visible, button:has-text('Continue'):visible, button[type=submit]:visible, input[type=submit]:visible").first();
+        if (await go.count()) await go.click(); else await codeBox.press("Enter");
+        await page.waitForTimeout(5000);
+        report("notice", "EP second step", "Code entered · now: " + await describeForm(page));
+        const handover = page.locator("button:has-text('Submit'):visible").first();
+        if (!page.url().startsWith(PORTAL) && (await handover.count()) && !(await codeBox.count())) await handover.click().catch(() => {});
+        continue;
+      }
+      // not on the code screen yet: "use another method" → "Authenticator App"
+      const other = page.locator("a:has-text('another'), button:has-text('another'), a:has-text('Other'), button:has-text('Other'), a:has-text('Change'), button:has-text('Change'), a:has-text('options'), button:has-text('options')").first();
+      const app = page.locator(":is(a, button, li, div[role=button], [class*=device], [class*=method]):has-text('Authenticator')").last();
+      if (await app.count()) await app.click().catch(() => {});
+      else if (await other.count()) await other.click().catch(() => {});
+      else {
+        const again = page.locator("button:has-text('Try again'):visible").first();
+        if (await again.count()) await again.click().catch(() => {});
+      }
+      await page.waitForTimeout(4000);
+      report("notice", "EP second step " + (step + 1), await describeForm(page));
+    }
   }
   // EP's verification code
   if (!page.url().startsWith(PORTAL) && await isCodeScreen(page)) {
