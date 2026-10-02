@@ -105,9 +105,25 @@ function sameName(a, b) {
 
 // your existing calls, loaded only when a new availability check turns up
 // (keeps the number of database reads well inside Firebase's free allowance)
+// Emails already handled, kept in ONE small database record ("meta/seen"), so each 5-minute check
+// costs a couple of reads instead of one read per email (Firebase's free plan: 50,000 reads a day)
+let seenCache = null, seenDirty = false;
+async function loadSeenCache() {
+  if (seenCache) return;
+  const d = (await db.collection("meta").doc("seen").get()).data();
+  seenCache = new Map(Object.entries((d && d.keys) || {}));
+}
+function markSeen(key) { if (seenCache && !seenCache.has(key)) { seenCache.set(key, Date.now()); seenDirty = true; } }
+async function saveSeenCache() {
+  if (!seenCache || !seenDirty) return;
+  const keep = [...seenCache.entries()].sort((a, b) => b[1] - a[1]).slice(0, 1500);
+  await db.collection("meta").doc("seen").set({ keys: Object.fromEntries(keep), at: new Date().toISOString() });
+}
 let existingCalls = null;
+let existingCallsPartial = false;       // true when only some calls were loaded (EP page refresh)
 async function loadExistingCalls() {
-  if (!existingCalls) {
+  if (!existingCalls || existingCallsPartial) {
+    existingCallsPartial = false;
     const snap = await db.collection("calls").get();
     existingCalls = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   }
@@ -599,7 +615,15 @@ async function enrichFromPortal(call) {
 }
 // every 20 minutes, look again at EP pages of calls you haven't answered yet (max 6 per run)
 async function refreshPendingPortalPages() {
-  await loadExistingCalls();
+  // Firebase's free plan allows 50,000 reads a day: only look every 30 minutes, and only at
+  // the calls that can still change (not the whole schedule)
+  const slot = Math.floor(Date.now() / (5 * 60 * 1000)) % 6;
+  if (slot !== 0 && !process.env.PORTAL_DEBUG && !REBUILD) return;
+  if (!existingCalls) {
+    const snap = await db.collection("calls").where("status", "in", ["pending", "available", "declined"]).get();
+    existingCalls = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    existingCallsPartial = true;
+  }
   const dbg = !!process.env.PORTAL_DEBUG;
   const today = londonDate();
   // new requests: every 20 minutes; ones you've answered (with days still ahead): every 6 hours
@@ -805,8 +829,10 @@ async function checkFolder(client, account, counts, folder, collect) {
   //    (re-read mode: all of them, to be worked through in date order)
   for (const cand of candidates) {
     const key = emailKey(cand.id);
+    if (!collect) { await loadSeenCache(); if (seenCache.has(key)) { counts.alreadySeen++; continue; } }
     const seenRef = db.collection("processed").doc(key);
     const seenDoc = await seenRef.get();
+    if (seenDoc.exists) markSeen(key);
     if (seenDoc.exists && !collect) {
       counts.alreadySeen++;
       // older calls were saved without the agency's reply link: add it now, then read the EP page
@@ -850,6 +876,7 @@ async function handleMail(m, account, counts, rereading) {
   const kind = classifyEmail(subject, text, isFromCastingAgency(from.name, from.address, knownAgencies));
   if (!kind) {
     if (!m.seen) await seenRef.set({ at: new Date().toISOString(), call: null });
+    markSeen(key);
     counts.notACall++;
     return;
   }
@@ -859,6 +886,7 @@ async function handleMail(m, account, counts, rereading) {
   const remember = async id => {
     const callId = id || (m.seen && m.seen.call) || null;
     await seenRef.set({ at: new Date().toISOString(), call: callId, kind });
+    markSeen(key);
     await logEmail(callId, { ...m, key }, kind);
   };
 
@@ -1140,6 +1168,7 @@ async function handleMail(m, account, counts, rereading) {
   if (REBUILD) report("notice", "Re-read everything", `Booking emails: ${stats.booked[0]} found, ${stats.booked[1]} matched to a job, ${stats.booked[2]} added as new booked jobs. ` +
     `Release emails: ${stats.released[0]} found, ${stats.released[1]} matched. Answer confirmations: ${stats.replied[0]} found, ${stats.replied[1]} matched. ` +
     `Call times: ${stats.calltime[0]} found, ${stats.calltime[1]} matched. Requests brought back: ${stats.restored}. Jobs amended by later emails (instead of a new copy): ${stats.amended}. Old requests never answered (now "Expired"): ${stats.expired || 0}.`);
+  try { await saveSeenCache(); } catch (e) { /* only a speed-up */ }
   try { await refreshPendingPortalPages(); } catch (e) { report("warning", "EP pages", "Could not refresh EP pages (" + (e.code || e.name) + ")."); }
   if (portal.read + portal.failed + portal.login) {
     if (process.env.PORTAL_DEBUG) report("notice", "EP page check", `pages: ${portal.read}; with "recorded your response": ${portal.recorded}; with answer buttons: ${portal.radios}; with ticked answers: ${portal.ticked}; mostly script (built in the browser): ${portal.scripts}; with dates found: ${portal.dated}; answer shapes: ${Object.entries(shapes).map(([k, v]) => k + " " + v).join(", ") || "none"}`);
