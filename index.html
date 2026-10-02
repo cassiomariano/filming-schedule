@@ -333,6 +333,13 @@ textarea.inp{min-height:84px;resize:vertical}
 .ps-head .src{flex:1}
 .pageshot img{display:block;width:100%;max-height:520px;object-fit:cover;object-position:top;border-radius:6px;border:1px solid var(--line);background:#fff;cursor:zoom-in}
 .pageshot img.full{max-height:none;cursor:zoom-out}
+.yearly{margin:14px 0}
+.ytable{overflow-x:auto}
+.yrow{display:grid;grid-template-columns:60px 60px 50px 50px 70px 90px 120px 120px minmax(140px,1fr) 90px;gap:8px;align-items:center;padding:8px 10px;border:0;border-bottom:1px solid var(--line);background:none;font:inherit;color:inherit;text-align:left;width:100%;min-width:860px;cursor:pointer}
+.yrow.yhead{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);cursor:default}
+.yrow.on{background:var(--accent-soft)}
+.yrow small{color:var(--muted)}
+.yrow .ag{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mails{display:flex;flex-direction:column;gap:6px;margin-top:6px}
 .mails details{border:1px solid var(--line);border-radius:8px;background:var(--surface-2);padding:6px 10px}
 .mails summary{cursor:pointer;font-size:13px}
@@ -1009,34 +1016,72 @@ const OUT = [
 function outcome(c){ return OUT.find(o => o.st.includes(c.status)) || OUT[3]; }
 function basisDate(c){ return S.basis === "received" ? (c.received || firstDate(c)) : firstDate(c); }
 
+/* one year's numbers (calls counted by the chosen date; days counted by their own date) */
+function yearStats(all, y){
+  const inY = all.filter(c => (basisDate(c) || "").slice(0, 4) === y);
+  const answered = inY.filter(c => c.status !== "pending" && c.status !== "expired");
+  const declined = answered.filter(c => c.status === "declined").length;
+  const days = {fit: 0, reh: 0, film: 0}, ahead = {fit: 0, reh: 0, film: 0};
+  const bookedJobs = new Set();
+  all.forEach(c => (c.dates || []).forEach(e => {
+    if (e.d.slice(0, 4) !== y) return;
+    const st = dayStatus(c, e), k = KIND[e.kind] ? e.kind : "film";
+    if (st === "done") { days[k]++; bookedJobs.add(c.id); }
+    else if (st === "confirmed" && e.d >= TODAY) { ahead[k]++; bookedJobs.add(c.id); }
+  }));
+  const agencies = group(inY, c => c.agency || "Unknown");          // most calls first
+  const earned = moneyJobs().reduce((n, j) => n + earnedBetween(j, y + "-01-01", y + "-12-31"), 0);
+  return { calls: inY.length, accepted: answered.length - declined, declined, noReply: inY.length - answered.length,
+           booked: bookedJobs.size, days, ahead, worked: days.fit + days.reh + days.film,
+           topAgency: agencies[0] ? `${agencies[0].name} (${agencies[0].total})` : "–", earned };
+}
 function renderStats(){
   const all = callList();
   const now = new Date();
   const wk = key(weekStart(now)), mo = key(monthStart(now));
   const nextWk = addDays(wk, 7), nextMo = key(new Date(now.getFullYear(), now.getMonth()+1, 1));   // upper limits, so future jobs don't count
+  const lastMo = key(new Date(now.getFullYear(), now.getMonth()-1, 1));
   const withD = all.filter(c => basisDate(c));
   const thisWeek = withD.filter(c => basisDate(c) >= wk && basisDate(c) < nextWk).length;
   const thisMonth = withD.filter(c => basisDate(c) >= mo && basisDate(c) < nextMo).length;
-  const answered = all.filter(c => c.status !== "pending" && c.status !== "expired");
-  const yes = answered.filter(c => c.status !== "declined").length;
-  const booked = all.filter(c => c.status === "confirmed" || c.status === "done").length;
-  const workDays = new Set(all.flatMap(c => (c.dates||[]).filter(e => e.d.slice(0,4) === String(now.getFullYear()) && ["done","confirmed"].includes(dayStatus(c,e))).map(e => e.d))).size;
+  const lastMonth = withD.filter(c => basisDate(c) >= lastMo && basisDate(c) < mo).length;
   const fallback = all.filter(c => !c.received).length;
+  // the year chosen at the top ("All years" or one year)
+  const years = [...new Set(withD.map(c => basisDate(c).slice(0, 4)).concat(all.flatMap(c => (c.dates||[]).map(e => e.d.slice(0, 4)))))].filter(y => /^\d{4}$/.test(y)).sort().reverse();
+  const thisYear = String(now.getFullYear());
+  if (!S.statYear || (S.statYear !== "all" && !years.includes(S.statYear))) S.statYear = years.includes(thisYear) ? thisYear : "all";
+  const Y = S.statYear;
+  const ys = Y === "all" ? null : yearStats(all, Y);
+  const answered = all.filter(c => c.status !== "pending" && c.status !== "expired" && (Y === "all" || (basisDate(c)||"").slice(0,4) === Y));
+  const yes = answered.filter(c => c.status !== "declined").length;
+  const bookedAll = all.filter(c => c.status === "confirmed" || c.status === "done").length;
+  // same point last year, to compare "so far"
+  const ytd = (y, until) => withD.filter(c => basisDate(c) >= y + "-01-01" && basisDate(c) <= until).length;
+  const sofar = ytd(thisYear, TODAY), lastSofar = ytd(String(now.getFullYear()-1), (now.getFullYear()-1) + TODAY.slice(4));
+  const diff = lastSofar ? Math.round((sofar - lastSofar) / lastSofar * 100) : null;
+  const scope = list => Y === "all" ? list : list.filter(c => (basisDate(c)||"").slice(0,4) === Y);
 
   let h = `<div class="bar"><div class="seg" role="group" aria-label="Count calls by"><button data-basis="received" aria-pressed="${S.basis==="received"}">By date received</button><button data-basis="work" aria-pressed="${S.basis==="work"}">By first work date</button></div>
-    <span class="src">${S.basis==="received" && fallback ? `${fallback} imported calls have no received date, so they count on their first work date.` : ""}</span></div>
+    <div class="seg" role="group" aria-label="Year">${["all", ...years].map(y => `<button data-statyear="${y}" aria-pressed="${Y===y}">${y==="all"?"All years":y}</button>`).join("")}</div>
+    <span class="src">${S.basis==="received" && fallback ? `${fallback} older calls (from your spreadsheet) have no received date, so they count on their first work date.` : ""}</span></div>
   <div class="kpis">
-    <div class="kpi"><span class="l">This week</span><span class="n">${thisWeek}</span><span class="s">calls since ${fmtDay(wk)}</span></div>
-    <div class="kpi"><span class="l">This month</span><span class="n">${thisMonth}</span><span class="s">calls in ${MONTHS[now.getMonth()]}</span></div>
-    <div class="kpi"><span class="l">Accept rate</span><span class="n">${answered.length ? Math.round(yes/answered.length*100) : 0}%</span><span class="s">${yes} accepted · ${answered.length-yes} declined</span></div>
-    <div class="kpi"><span class="l">Booked</span><span class="n">${booked}</span><span class="s">confirmed or worked, all time</span></div>
-    <div class="kpi"><span class="l">Days on set ${now.getFullYear()}</span><span class="n">${workDays}</span><span class="s">fitting + shoot days booked</span></div>
+    <div class="kpi"><span class="l">This week</span><span class="n">${thisWeek}</span><span class="s">calls ${fmtDay(wk)} – ${fmtDay(addDays(wk, 6))}</span></div>
+    <div class="kpi"><span class="l">${MONTHS[now.getMonth()]} so far</span><span class="n">${thisMonth}</span><span class="s">calls · ${MONTHS[(now.getMonth()+11)%12]}: ${lastMonth}</span></div>
+    <div class="kpi"><span class="l">${thisYear} so far</span><span class="n">${sofar}</span><span class="s">calls${diff === null ? "" : ` · ${diff >= 0 ? "+" : ""}${diff}% on ${now.getFullYear()-1} at this point`}</span></div>
+    <div class="kpi"><span class="l">Accept rate${Y==="all"?"":" "+Y}</span><span class="n">${answered.length ? Math.round(yes/answered.length*100) : 0}%</span><span class="s">${yes} said yes · ${answered.length-yes} said no</span></div>
+    ${ys ? `<div class="kpi"><span class="l">Days on set ${Y}</span><span class="n">${ys.worked}</span><span class="s">worked${Y===thisYear ? ` · ${ys.ahead.fit + ys.ahead.reh + ys.ahead.film} more booked ahead` : ""}</span></div>
+    <div class="kpi"><span class="l">Earned ${Y}</span><span class="n">${money(ys.earned)}</span><span class="s">from the Money tab (rates you've added)</span></div>`
+         : `<div class="kpi"><span class="l">Booked</span><span class="n">${bookedAll}</span><span class="s">jobs confirmed or worked, all time</span></div>`}
   </div>
+  <section class="panel yearly"><h2>Year by year</h2><p class="hint">Calls by ${S.basis==="received"?"date received":"first work date"}; days by the day itself. Earned uses the rates in the Money tab.</p>
+    <div class="ytable"><div class="yrow yhead"><span>Year</span><span>Calls</span><span>Yes</span><span>No</span><span>No reply</span><span>Jobs booked</span><span>Days worked</span><span>Fit · Reh · Shoot</span><span>Top agency</span><span>Earned</span></div>
+    ${years.map(y => { const t = yearStats(all, y); return `<button type="button" class="yrow${y===Y?" on":""}" data-statyear="${y}"><span><b>${y}</b></span><span>${t.calls}</span><span>${t.accepted}</span><span>${t.declined}</span><span>${t.noReply}</span><span>${t.booked}</span><span>${t.worked}${y===thisYear && (t.ahead.fit+t.ahead.reh+t.ahead.film) ? ` <small>+${t.ahead.fit+t.ahead.reh+t.ahead.film} ahead</small>` : ""}</span><span>${t.days.fit} · ${t.days.reh} · ${t.days.film}</span><span class="ag">${esc(t.topAgency)}</span><span>${money(t.earned)}</span></button>`; }).join("")}
+    </div></section>
   <div class="panels">
     <section class="panel"><h2>Calls per week</h2><p class="hint">Last 16 weeks, by ${S.basis==="received"?"date received":"first work date"}.</p>${weekChart(withD)}</section>
     <section class="panel"><h2>Calls per month</h2><p class="hint">Last 12 months, split by outcome.</p>${monthChart(withD)}<div class="keyrow">${OUT.map(o => `<span><i class="sw" style="background:${o.color}"></i>${o.label}</span>`).join("")}</div></section>
-    <section class="panel"><h2>By agency</h2><p class="hint">All calls, split by outcome.</p>${hbars(group(all, c => c.agency || "Unknown"), 14)}</section>
-    <section class="panel"><h2>By role</h2><p class="hint">What you are being called for.</p>${hbars(group(all.filter(c => c.role), c => roleKey(c.role)), 14)}</section>
+    <section class="panel"><h2>By agency${Y==="all"?"":" · "+Y}</h2><p class="hint">Calls split by outcome.</p>${hbars(group(scope(all), c => c.agency || "Unknown"), 14)}</section>
+    <section class="panel"><h2>By role${Y==="all"?"":" · "+Y}</h2><p class="hint">What you are being called for.</p>${hbars(group(scope(all).filter(c => c.role), c => roleKey(c.role)), 14)}</section>
   </div>`;
   main.innerHTML = h;
 }
@@ -1736,6 +1781,7 @@ document.addEventListener("click", e => {
   if (ds.calview){ S.calView = ds.calview; save("calView2", S.calView); render(); return; }
   if (ds.show){ S.show.has(ds.show) ? S.show.delete(ds.show) : S.show.add(ds.show); save("show", [...S.show]); render(); return; }
   if (ds.basis){ S.basis = ds.basis; save("basis", S.basis); render(); return; }
+  if (ds.statyear){ S.statYear = ds.statyear; render(); return; }
   if (ds.set){ setStatus(ds.id, ds.set); return; }
   if (ds.st && draft){ pullForm(); draft.status = ds.st; drawEditor(); return; }
   if (ds.adddate && draft){ pullForm(); const last = draft.dates[draft.dates.length-1]; draft.dates.push({d: last ? last.d : TODAY, kind: ds.adddate}); drawEditor(); $("#dd-"+(draft.dates.length-1), layer)?.focus(); return; }
