@@ -191,34 +191,48 @@ async function signIn(page) {
     const handover = page.locator("button:has-text('Submit'):visible, input[type=submit][value*=Submit i]:visible").first();
     if (!page.url().startsWith(PORTAL) && (await handover.count()) && !(await pass().count())) await handover.click().catch(() => {});
   }
-  // EP's second step (PingID): prefer the authenticator app, whose code the robot can make itself
+  // EP's second step (PingID): prefer the authenticator app, whose code the robot can make itself.
+  // PingID may draw its screens inside a frame, so look in every frame of the page.
   if (!page.url().startsWith(PORTAL) && process.env["EP_TOTP" + LOGIN.n]) {
-    report("notice", "EP second step", await describeForm(page));
-    for (let step = 0; step < 4 && !page.url().startsWith(PORTAL); step++) {
-      const codeBox = page.locator("input[autocomplete=one-time-code]:visible, input[name*=otp i]:visible, input[id*=otp i]:visible, input[name*=code i]:visible, input[id*=code i]:visible, input[name*=passcode i]:visible, input[type=tel]:visible, input[type=number]:visible, input[type=text]:visible, input[type=password]:visible").first();
-      if (await codeBox.count()) {
-        // wait for a fresh 30-second window so the code doesn't expire while typing
-        if ((Date.now() / 1000) % 30 > 25) await page.waitForTimeout(6000);
+    const where = () => [new URL(page.url()).host, ...page.frames().slice(1).map(f => { try { return "frame:" + new URL(f.url()).host; } catch (e) { return "frame"; } })].join(", ");
+    const inFrames = async sel => { for (const f of page.frames()) { const l = f.locator(sel).first(); if (await l.count().catch(() => 0)) return l; } return null; };
+    const describeAll = async () => {
+      const parts = [];
+      for (const f of page.frames()) {
+        const d = await f.evaluate(() => {
+          const t = (document.body && document.body.innerText || "").toLowerCase();
+          const inputs = [...document.querySelectorAll("input")].filter(i => i.type !== "hidden").map(i => i.type + (i.name ? ":" + i.name : "") + (i.id ? "#" + i.id : ""));
+          const buttons = [...document.querySelectorAll("button, input[type=submit], a")].map(b => (b.innerText || b.value || "").trim().slice(0, 25)).filter(Boolean).slice(0, 10);
+          const words = ["authenticat", "passcode", "pingid", "push", "approve", "another", "other", "method", "expired", "timed out", "denied", "error", "blocked", "device", "phone", "desktop", "not paired", "sms", "text"].filter(w => t.includes(w));
+          return `inputs [${inputs.join(", ")}] buttons [${buttons.join(" | ")}] words [${words.join(", ")}]`;
+        }).catch(() => "unreadable");
+        parts.push(d);
+      }
+      return `at ${where()} · ` + parts.join(" ;; ");
+    };
+    report("notice", "EP second step", await describeAll());
+    for (let step = 0; step < 6 && !page.url().startsWith(PORTAL); step++) {
+      const codeBox = await inFrames("input[autocomplete=one-time-code]:visible, input[name*=otp i]:visible, input[id*=otp i]:visible, input[name*=code i]:visible, input[id*=code i]:visible, input[name*=passcode i]:visible, input[type=tel]:visible, input[type=number]:visible, input[type=text]:visible, input[type=password]:visible");
+      if (codeBox) {
+        if ((Date.now() / 1000) % 30 > 25) await page.waitForTimeout(6000);   // a fresh 30-second code
         await codeBox.fill(totp(process.env["EP_TOTP" + LOGIN.n]));
-        const go = page.locator("button:has-text('Verify'):visible, button:has-text('Sign On'):visible, button:has-text('Sign in'):visible, button:has-text('Submit'):visible, button:has-text('Continue'):visible, button[type=submit]:visible, input[type=submit]:visible").first();
-        if (await go.count()) await go.click(); else await codeBox.press("Enter");
-        await page.waitForTimeout(5000);
-        report("notice", "EP second step", "Code entered · now: " + await describeForm(page));
-        const handover = page.locator("button:has-text('Submit'):visible").first();
-        if (!page.url().startsWith(PORTAL) && (await handover.count()) && !(await codeBox.count())) await handover.click().catch(() => {});
+        const go = await inFrames("button:has-text('Verify'):visible, button:has-text('Sign On'):visible, button:has-text('Sign in'):visible, button:has-text('Submit'):visible, button:has-text('Continue'):visible, button[type=submit]:visible, input[type=submit]:visible");
+        if (go) await go.click(); else await codeBox.press("Enter");
+        await page.waitForTimeout(6000);
+        report("notice", "EP second step", "Code entered · now " + await describeAll());
         continue;
       }
-      // not on the code screen yet: "use another method" → "Authenticator App"
-      const other = page.locator("a:has-text('another'), button:has-text('another'), a:has-text('Other'), button:has-text('Other'), a:has-text('Change'), button:has-text('Change'), a:has-text('options'), button:has-text('options')").first();
-      const app = page.locator(":is(a, button, li, div[role=button], [class*=device], [class*=method]):has-text('Authenticator')").last();
-      if (await app.count()) await app.click().catch(() => {});
-      else if (await other.count()) await other.click().catch(() => {});
-      else {
-        const again = page.locator("button:has-text('Try again'):visible").first();
-        if (await again.count()) await again.click().catch(() => {});
-      }
-      await page.waitForTimeout(4000);
-      report("notice", "EP second step " + (step + 1), await describeForm(page));
+      // choose the authenticator app if a list of methods is showing, else "another method"
+      const app = await inFrames(":is(a, button, li, [role=button], [class*=device], [class*=method]):has-text('Authenticator'):visible");
+      const other = await inFrames(":is(a, button):has-text('another'):visible, :is(a, button):has-text('Other'):visible, :is(a, button):has-text('Change'):visible, :is(a, button):has-text('options'):visible");
+      const submit = await inFrames("button:has-text('Submit'):visible, input[type=submit]:visible");
+      const again = await inFrames("button:has-text('Try again'):visible");
+      if (app) await app.click().catch(() => {});
+      else if (other) await other.click().catch(() => {});
+      else if (submit) await submit.click().catch(() => {});      // hand-over page: send it on
+      else if (again) await again.click().catch(() => {});
+      await page.waitForTimeout(5000);
+      report("notice", "EP second step " + (step + 1), await describeAll());
     }
   }
   // EP's verification code
