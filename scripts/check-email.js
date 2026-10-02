@@ -188,9 +188,17 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
   const open = existingCalls.filter(c => c.id && c.id !== skipId && okStatus.includes(c.status));
   const listed = new Set((r.dates || []).map(x => x.d));
   let matches = r.project ? open.filter(c => c.project && sameProject(c.project, r.project)) : [];
-  if (matches.length > 1 && r.agency) matches = matches.filter(c => sameName(c.agency, r.agency));
+  if (matches.length > 1 && r.agency) {
+    const sameAgency = matches.filter(c => sameName(c.agency, r.agency));
+    if (sameAgency.length) matches = sameAgency;
+  }
   if (matches.length > 1) matches = matches.filter(c => c.status !== "released");
   if (matches.length > 1 && (!r.agency || matches.every(c => sameName(c.agency, matches[0].agency)))) matches = [pickOne(matches)];
+  // still several (same production via different agencies): the one with the days this email lists
+  if (matches.length > 1 && listed.size) {
+    const byDay = matches.filter(c => (c.dates || []).some(e => listed.has(e.d)));
+    if (byDay.length === 1) matches = byDay;
+  }
   const codes = linkCodes(links);
   if (matches.length !== 1 && codes.size) {
     const byCode = open.filter(c => [...linkCodes(c.links)].some(x => codes.has(x)));
