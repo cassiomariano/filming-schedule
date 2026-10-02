@@ -1,0 +1,41 @@
+# Signs in to your EP portal and reads your Payments pages (see scripts/ep-payments.js).
+# Run it by hand: Actions → "EP payments" → Run workflow.
+name: EP payments
+
+on:
+  workflow_dispatch:
+    inputs:
+      export:
+        description: "Private export (sealed) of the payments pages to the vault branch"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ep-payments
+
+jobs:
+  payments:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write             # only used to put a sealed export on the "vault" branch
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --omit=dev
+      - run: npm i --no-save playwright@1 && npx playwright install --with-deps chromium
+      - run: node scripts/ep-payments.js
+        env:
+          EP_EMAIL: ${{ secrets.EP_EMAIL }}
+          EP_PASSWORD: ${{ secrets.EP_PASSWORD }}
+          EP_EXPORT: ${{ github.event.inputs.export || 'true' }}
+      - name: Put the sealed export on the vault branch
+        if: ${{ github.event.inputs.export != 'false' && hashFiles('export.sealed.json') != '' }}
+        run: |
+          mkdir /tmp/v && cp export.sealed.json /tmp/v/
+          cd /tmp/v && git init -q -b vault && git add export.sealed.json
+          git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -q -m "sealed export"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" vault
