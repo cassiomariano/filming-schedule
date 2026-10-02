@@ -512,6 +512,12 @@ function tidy(c){
     .filter(e => e && typeof e.d === "string" && /^\d{4}-\d\d-\d\d$/.test(e.d))
     .map(e => e.kind ? e : {...e, kind: "film"});
   c = {...c, dates};
+  // a new request whose reply deadline passed (more than 12 hours ago) can't be answered any more
+  if (c.status === "pending" && c.respondBy && new Date(c.respondBy).getTime() < Date.now() - 12 * 3600e3)
+    return {...c, status: "expired", tidied: c.status};
+  // a new request with no dates and no deadline, older than 3 weeks, is stale
+  if (c.status === "pending" && !dates.length && !c.respondBy && (c.received || "") && c.received < addDays(TODAY, -21))
+    return {...c, status: "expired", tidied: c.status};
   if (!ACTIVE.has(c.status) || !dates.length) return c;
   // every day released / canceled / said no (and at least one released or canceled): show it as released
   const raw = dates.map(e => dayStatusRaw(c, e));
@@ -683,7 +689,9 @@ function legendHTML(){
 function alertsHTML(idx){
   const pend = callList().filter(c => c.status === "pending").sort((a,b) => (a.respondBy||"9").localeCompare(b.respondBy||"9"));
   const cl = [...clashes(idx)].filter(([d]) => d >= TODAY).sort((a,b) => a[0].localeCompare(b[0]));
-  const rev = callList().filter(c => c.review).sort((a,b) => (b.received||"").localeCompare(a.received||""));
+  // "check details" only for live jobs (still open, with days ahead or no dates yet, from the last 3 weeks)
+  const live = c => ACTIVE.has(c.status) && (!(c.dates||[]).length || (c.dates||[]).some(e => e.d >= TODAY)) && (!c.received || c.received >= addDays(TODAY, -21));
+  const rev = callList().filter(c => c.review && live(c)).sort((a,b) => (b.received||"").localeCompare(a.received||""));
   if (!pend.length && !cl.length && !rev.length) return "";
   let h = `<div class="alerts">`;
   if (rev.length) h += `<section class="alert" style="border-left-color:var(--accent)"><h3>From your email · check details · ${rev.length}</h3><ul>${rev.slice(0,6).map(c =>
