@@ -650,6 +650,15 @@ async function applyReply(r, links, answer) {
 
 // "Find an email": what happened to emails whose SUBJECT contains some words?
 // Reports only yes/no facts, never names or contents (GitHub logs are public).
+// common words only; anything else (names, places) becomes "*"
+function maskShape(subj) {
+  const SAFE = new Set("a an the for on of to in at your you you're are is be been have has we our from and with re fw fwd booking booked book confirmed confirmation confirm update availability available av check request new job work dates date day days tomorrow today next week call time shoot filming fitting costume selected not required needed final please reply urgent asap important change thanks thank released release hold pencil extras extra sa supporting artist role tv film series feature commercial free can could would like interested any this monday tuesday wednesday thursday friday saturday sunday mon tue wed thu fri sat sun – - : | ! ?".split(" "));
+  return String(subj).toLowerCase().replace(/[0-9]+/g, "#").split(/\s+/).map(w => { const x = w.replace(/[^a-z'#–:|!?-]/g, ""); return SAFE.has(x) || /^#/.test(x) ? x : "*"; }).join(" ").replace(/(\* )+\*/g, "*");
+}
+const PHRASE_PROBES = [["are you free/available", /are you (free|available)/i], ["would you be", /would you be (free|available|interested|happy)/i],
+  ["can you do", /can you (do|make|work)/i], ["availability for", /availability (for|on)/i], ["confirm availability", /confirm (your |my )?availab/i],
+  ["let me know", /let me know/i], ["interested", /interested/i], ["submit", /submit/i], ["job for you", /(job|work|role) for you/i],
+  ["date in text", /\b\d{1,2}(st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i], ["booked", /booked|booking/i], ["released", /released|not required/i]];
 async function findEmails(words) {
   await loadExistingCalls();
   for (let i = 0; i < accounts.length; i++) {
@@ -659,10 +668,12 @@ async function findEmails(words) {
       let lock;
       try { lock = await client.getMailboxLock(folder); } catch (e) { continue; }
       try {
-        const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-        const uids = await client.search({ since: since, subject: words }, { uid: true }) || [];
-        if (!uids.length) { report("notice", `Find · account ${i + 1} · ${folder}`, "No email with those words in the subject (last 14 days)."); continue; }
-        for (const uid of uids.slice(0, 5)) {
+        const bySender = /^from:/i.test(words);
+        const since = new Date(Date.now() - (bySender ? 480 : 14) * 24 * 60 * 60 * 1000);
+        const query = bySender ? { since, from: words.slice(5).trim() } : { since, subject: words };
+        const uids = await client.search(query, { uid: true }) || [];
+        if (!uids.length) { if (!bySender) report("notice", `Find · account ${i + 1} · ${folder}`, "No email with those words in the subject (last 14 days)."); continue; }
+        for (const uid of uids.slice(-15)) {
           const msg = await client.fetchOne(uid, { envelope: true, source: true }, { uid: true });
           const env = msg.envelope || {}; const from = (env.from && env.from[0]) || {};
           const mail = await simpleParser(msg.source);
@@ -681,6 +692,8 @@ async function findEmails(words) {
             "production name found: " + (r.project ? "yes" : "no"),
             "dates found: " + r.dates.length,
             "reply link: " + (extractLinks(mail.html || "").some(l => /epcastingportal/i.test(l.url)) ? "EP page" : "none"),
+            "subject shape: " + maskShape(env.subject || ""),
+            "phrases: " + PHRASE_PROBES.filter(([, re]) => re.test((env.subject || "") + "\n" + text.slice(0, 3000))).map(([k]) => k).join(", "),
           ].join(" · "));
         }
       } finally { lock.release(); }
