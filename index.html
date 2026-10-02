@@ -149,6 +149,7 @@ h3.wk{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transfo
 .uphead h4{margin:0;font-family:var(--f-display);font-weight:800;font-size:24px;line-height:1.05;text-transform:uppercase;letter-spacing:.01em;overflow-wrap:anywhere}
 .upst{align-self:flex-start;font-family:var(--f-mono);font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;border-radius:20px;padding:2px 9px}
 .upmeta{font-size:12.5px;color:var(--muted)}
+.upmeta .ag{color:var(--ink);font-weight:700;font-size:13.5px}   /* the agency, easy to spot */
 .uprow{display:grid;grid-template-columns:64px 1fr;gap:8px;align-items:start}
 .uplab{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-top:4px}
 .updays{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
@@ -352,6 +353,17 @@ details.more summary{cursor:pointer;font-weight:600;display:flex;gap:8px;align-i
   .row{grid-template-columns:6px minmax(0,1fr)}
   .row .acts{flex-direction:row;padding:0 12px 10px;grid-column:2}
 }
+/* phones: the month fits the screen, and all four tabs fit (or scroll sideways) */
+@media (max-width:600px){
+  .month{grid-template-columns:repeat(7,minmax(0,1fr));min-width:0}
+  .dow{padding:6px 2px;font-size:10px;text-align:center;letter-spacing:0}
+  .day{min-height:76px;padding:3px 2px;gap:2px}
+  .ev{font-size:9.5px;padding:1px 2px;gap:2px}
+  .ev .k,.ev .m{display:none}
+  .clash{font-size:8px;padding:0 2px}
+  .tabs{gap:0;-webkit-overflow-scrolling:touch}
+  .tab{padding:8px 7px 10px;font-size:14px;letter-spacing:.03em;gap:4px;flex:none}
+}
 </style>
 </head>
 <body>
@@ -408,9 +420,20 @@ const SMAP = Object.fromEntries(STATUSES.map(s => [s.k, s]));
 /* the name to show for a call: production, else the email subject */
 /* old jobs tidy themselves: once every date has passed, a booked job is "worked", an unanswered
    one "expired", and one you said yes to that never got booked "not booked" */
+/* tidy() only changes what you SEE – it is never saved (the editor puts the real status back) */
 function tidy(c){
-  const ds = (c.dates||[]).map(e => e.d).filter(Boolean);
-  if (!ds.length || ds.some(d => d >= TODAY)) return c;
+  // keep only days with a proper YYYY-MM-DD date; a day with no type is a shoot day
+  const dates = (Array.isArray(c.dates) ? c.dates : [])
+    .filter(e => e && typeof e.d === "string" && /^\d{4}-\d\d-\d\d$/.test(e.d))
+    .map(e => e.kind ? e : {...e, kind: "film"});
+  c = {...c, dates};
+  if (!ACTIVE.has(c.status) || !dates.length) return c;
+  // every day released / canceled / said no (and at least one released or canceled): show it as released
+  const raw = dates.map(e => dayStatusRaw(c, e));
+  if (raw.every(s => s === "released" || s === "canceled" || s === "declined") && raw.some(s => s !== "declined"))
+    return {...c, status: "released", tidied: c.status};
+  // still has a day ahead that isn't released / canceled: leave it as it is
+  if (dates.some((e, i) => e.d >= TODAY && raw[i] !== "released" && raw[i] !== "canceled")) return c;
   const map = {confirmed:"done", pending:"expired", available:"lapsed"};
   return map[c.status] ? {...c, status: map[c.status], tidied: c.status} : c;
 }
@@ -420,6 +443,7 @@ const MEANS = {pending:"New – reply needed", available:"Available – waiting 
 const ACTIVE = new Set(["pending","available","confirmed"]);
 const STRUCK = new Set(["declined","released","canceled"]);
 const PRIORITY = {confirmed:0, available:1, pending:2, done:3, lapsed:4, expired:5, released:6, canceled:7, declined:8};
+const prio = st => PRIORITY[st] ?? 9;   // unknown statuses go last
 const DOW = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
@@ -441,9 +465,11 @@ const key = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
 const parse = k => { const [y,m,d] = k.split("-").map(Number); return new Date(y, m-1, d); };
 function monthStart(d){ return new Date(d.getFullYear(), d.getMonth(), 1); }
 function weekStart(d){ const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay()+6)%7)); return x; }
-const TODAY = key(new Date());
-const fmtShort = k => { const d = parse(k); return `${DOW[(d.getDay()+6)%7]} ${d.getDate()} ${MONTHS[d.getMonth()].slice(0,3)}`; };
+let TODAY = key(new Date());             // updated in render(), so it never goes stale overnight
+/* a date n days before/after k, counted on the calendar (safe across clock changes) */
+function addDays(k, n){ const d = parse(k); d.setDate(d.getDate() + n); return key(d); }
 const fmtDay = k => { const d = parse(k); return `${DOW[(d.getDay()+6)%7]} ${d.getDate()} ${MONTHS[d.getMonth()].slice(0,3)}${d.getFullYear() !== new Date().getFullYear() ? " "+String(d.getFullYear()).slice(2) : ""}`; };
+const fmtShort = fmtDay;                 // same thing: adds the year when it isn't this year
 const fmtDM = k => { const d = parse(k); return `${d.getDate()} ${MONTHS[d.getMonth()].slice(0,3)}${d.getFullYear() !== new Date().getFullYear() ? " "+String(d.getFullYear()).slice(2) : ""}`; };
 function dueText(iso){
   if (!iso) return "";
@@ -460,7 +486,9 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const clsS = st => "s-" + (SMAP[st] ? st : "pending");
 function toast(msg){ const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 2400); }
 function callList(){ return [...S.calls.values()]; }
-function nextDate(c){ const fut = (c.dates||[]).filter(e => e.d >= TODAY).map(e => e.d).sort(); return fut[0] || null; }
+/* days still to come that are still on (new, available or booked) */
+function daysAhead(c){ return (c.dates||[]).filter(e => e.d >= TODAY && ACTIVE.has(dayStatus(c, e))); }
+function nextDate(c){ const fut = daysAhead(c).map(e => e.d).sort(); return fut[0] || null; }
 function firstDate(c){ const all = (c.dates||[]).map(e => e.d).sort(); return all[0] || null; }
 function lastDate(c){ const all = (c.dates||[]).map(e => e.d).sort(); return all[all.length-1] || null; }
 
@@ -486,7 +514,7 @@ function dayStatusRaw(c, e){
   if (e.state === "pending") return "pending";           // a day added by a later email, not answered yet
   if (e.state === "worked" || e.done) return "done";
   // what you ticked for this day on the agency page
-  if (e.answer === "no" && (c.status === "pending" || c.status === "available")) return "declined";
+  if (e.answer === "no" && c.status !== "done") return "declined";   // you said no to this day
   if (e.answer === "yes" && c.status === "pending") return "available";
   return c.status;
 }
@@ -501,7 +529,16 @@ async function cycleDay(id, i){
   const e = dates[i];
   const now = e.state || (e.done ? "worked" : "");
   const cyc = e.d < TODAY ? CYCLE_PAST : CYCLE;          // a past day: worked / canceled / released
-  const next = cyc[(Math.max(0, cyc.indexOf(now)) + 1) % cyc.length];
+  // skip states that would look the same colour, so every tap visibly changes the day
+  const colour = st => ({lapsed:"canceled", expired:"canceled"}[st] || st);
+  const looks = state => { const t = {...e}; delete t.done; if (state) t.state = state; else delete t.state; return colour(dayStatus(c, t)); };
+  const nowLooks = colour(dayStatus(c, e));
+  const start = Math.max(0, cyc.indexOf(now));
+  let next = cyc[(start + 1) % cyc.length];
+  for (let step = 1; step < cyc.length; step++){
+    const cand = cyc[(start + step) % cyc.length];
+    if (looks(cand) !== nowLooks){ next = cand; break; }
+  }
   delete e.done;
   if (next) e.state = next; else delete e.state;
   try {
@@ -520,7 +557,7 @@ function dayIndex(){
       m.get(e.d).push({c, e});
     }
   }
-  for (const arr of m.values()) arr.sort((a,b) => PRIORITY[dayStatus(a.c,a.e)]-PRIORITY[dayStatus(b.c,b.e)] || (a.c.project||"").localeCompare(b.c.project||""));
+  for (const arr of m.values()) arr.sort((a,b) => prio(dayStatus(a.c,a.e))-prio(dayStatus(b.c,b.e)) || (a.c.project||"").localeCompare(b.c.project||""));
   return m;
 }
 function clashes(idx){
@@ -535,7 +572,11 @@ function clashes(idx){
 
 /* ================= rendering ================= */
 const main = $("#main");
+/* re-tidy every call from the raw database copy (needed when the day changes) */
+function retidy(){ S.calls = new Map([...(S.raw || new Map())].map(([id, d]) => [id, tidy({id, ...d})])); }
 function render(){
+  const t = key(new Date());
+  if (t !== TODAY){ TODAY = t; retidy(); }              // midnight passed while the app was open
   document.querySelectorAll(".tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.tab === S.tab)));
   const needReply = callList().filter(c => c.status === "pending").length;
   const rc = $("#replyCount"); rc.hidden = !needReply; rc.textContent = needReply; rc.className = "count hot";
@@ -616,7 +657,7 @@ function renderCalendar(){
       const dd = parse(d);
       h += `<div class="aday${d===TODAY?" today":""}" id="d-${d}"><div class="adate"><b>${dd.getDate()}</b><span>${DOW[(dd.getDay()+6)%7]} ${MONTHS[dd.getMonth()].slice(0,3)}</span></div><div class="alist">`;
       if (cl.has(d)) h += `<div class="clash-row">⚠ Clash — a confirmed booking overlaps ${cl.get(d).length-1} other call${cl.get(d).length>2?"s":""}</div>`;
-      items.forEach(({c,e}) => { const ds = dayStatus(c,e); h += `<button class="acard" data-open="${c.id}"><span class="bar8 ${clsS(ds)}"></span><span class="main"><span class="ttl"${STRUCK.has(ds)?' style="text-decoration:line-through"':''}>${e.night?"☾ ":""}${esc(nameOf(c))}${ds!==c.status?` <span class="pill ${clsS(ds)}">day ${SMAP[ds].short.toLowerCase()}</span>`:""}${c.attention?` <span class="flag">● attention</span>`:""}</span><span class="sub">${esc([c.agency, c.role, e.loc || (e.kind==="fit"?c.fitLocation:c.filmLocation) || c.location].filter(Boolean).join(" · "))}</span></span><span class="kind">${kindName(e.kind)}</span></button>`; });
+      items.forEach(({c,e}) => { const ds = dayStatus(c,e); h += `<button class="acard" data-open="${c.id}"><span class="bar8 ${clsS(ds)}"></span><span class="main"><span class="ttl"${STRUCK.has(ds)?' style="text-decoration:line-through"':''}>${e.night?"☾ ":""}${esc(nameOf(c))}${ds!==c.status?` <span class="pill ${clsS(ds)}">day ${(SMAP[ds]?.short || ds).toLowerCase()}</span>`:""}${c.attention?` <span class="flag">● attention</span>`:""}</span><span class="sub">${esc([c.agency, c.role, e.loc || (e.kind==="fit"?c.fitLocation:c.filmLocation) || c.location].filter(Boolean).join(" · "))}</span></span><span class="kind">${kindName(e.kind)}</span></button>`; });
       h += `</div></div>`;
     }
     if (!any) h += `<div class="empty"><h2>Nothing scheduled</h2><p>No dates in ${MONTHS[m.getMonth()]} ${m.getFullYear()} for the statuses ticked above. Use ◀ ▶ to change month.</p></div>`;
@@ -658,8 +699,10 @@ function bookedJobs(includePast){
   for (const c of S.calls.values()){
     const days = (c.dates||[]).map((e,i) => ({e, i, st: dayStatus(c, e)})).sort((a,b) => a.e.d.localeCompare(b.e.d));
     const live = days.filter(x => x.st === "confirmed");
-    const ahead = live.filter(x => x.e.d >= TODAY);
-    const booked = c.status === "confirmed" || live.length;
+    // days still to come that are still on (booked, on hold or new) – released/canceled days don't count
+    const ahead = days.filter(x => x.e.d >= TODAY && ACTIVE.has(x.st));
+    // a finished booked job shows as "done", so count it when past days are shown
+    const booked = c.status === "confirmed" || live.length || (includePast && c.status === "done");
     if (!booked) continue;
     if (!ahead.length && !(includePast && days.some(x => x.st === "confirmed" || x.st === "done"))) continue;
     jobs.push({c, days, ahead, next: ahead[0] ? ahead[0].e.d : "9999"});
@@ -692,7 +735,7 @@ function renderBooked(){
       <header class="bj-head" data-open="${c.id}" role="button" tabindex="0" title="Open all details">
         <div class="bj-top"><span class="lbl">${esc(lead)}</span>${nextLine?`<span class="bj-next">${nextLine}</span>`:""}</div>
         <h3>${esc(nameOf(c))}</h3>
-        <div class="bj-meta">${esc([c.agency, c.role].filter(Boolean).join(" · "))}</div>
+        <div class="bj-meta">${c.agency ? `<b>${esc(c.agency)}</b>` : ""}${c.agency && c.role ? " · " : ""}${esc(c.role || "")}</div>
       </header>
       <div class="bj-place">${place ? `📍 ${esc(place)} ${mapLink(place)}` : `<span class="soft">📍 location not known yet</span>`} ${outsideBadge(place)}</div>
       <div class="bj-days">${shown.map(x => {
@@ -730,9 +773,8 @@ function replyHTML(c){
 function upcomingHTML(cl){
   const active = ["pending","available","confirmed"];
   const jobs = callList()
-    .filter(c => active.includes(c.status) && (c.dates||[]).some(e => e.d >= TODAY))
+    .filter(c => active.includes(c.status) && daysAhead(c).length)     // only days that are still on
     .sort((a,b) => nextDate(a).localeCompare(nextDate(b)));
-  const undated = callList().filter(c => active.includes(c.status) && !(c.dates||[]).length);
   let h = `<div class="bar"><h2 class="month-title" style="margin:0">Upcoming</h2><span class="src">${jobs.length} jobs with dates ahead</span><span style="flex:1"></span>
     <div class="seg" role="group" aria-label="Calendar view"><button data-calview="upcoming" aria-pressed="true">Upcoming</button><button data-calview="month" aria-pressed="false">Month</button><button data-calview="agenda" aria-pressed="false">Agenda</button></div></div>`;
   if (!jobs.length) h += `<div class="empty"><h2>Nothing coming up</h2><p>New availability checks appear here as soon as they arrive.</p></div>`;
@@ -743,12 +785,15 @@ function upcomingHTML(cl){
     ["pending", "New – reply needed", "Accept or decline these."],
   ];
   h += `<div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Available – waiting to hear</span><span><i class="sw s-pending"></i>New</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released / said no</span><span>· Tap a day: yellow → blue → grey → back</span></div>`;
-  // Just in: requests from the last 3 days, and jobs a later email changed
-  const recent = key(new Date(Date.now() - 3 * 864e5));
-  const justIn = callList().filter(c => (c.status === "pending" || c.status === "available" || c.newInfo) && ACTIVE.has(c.status) &&
-      ((c.received || "") >= recent || c.newInfo) && (!(c.dates||[]).length || (c.dates||[]).some(e => e.d >= TODAY)))
+  // Just in: new or available requests from the last 3 days, and ones a later email changed.
+  // Booked jobs stay in "Booked" (with their "Updated" badge).
+  const recent = addDays(TODAY, -3);
+  const justIn = callList().filter(c => (c.status === "pending" || c.status === "available") &&
+      ((c.received || "") >= recent || c.newInfo) && (!(c.dates||[]).length || daysAhead(c).length))
     .sort((a,b) => (b.received||"").localeCompare(a.received||""));
   const inJust = new Set(justIn.map(c => c.id));
+  // no dates yet (and not already shown in "Just in")
+  const undated = callList().filter(c => active.includes(c.status) && !(c.dates||[]).length && !inJust.has(c.id));
   if (justIn.length) h += `<section class="justin"><h3 class="wk">Just in · ${justIn.length}</h3><p class="src" style="margin:-6px 0 0">New availability checks from the last 3 days, and jobs a later email changed.</p><div class="ups">${justIn.map(c => upCard(c, cl, true)).join("")}</div></section>`;
   for (const [st, title, sub] of sections){
     const list = jobs.filter(c => c.status === st && !inJust.has(c.id));
@@ -761,7 +806,8 @@ function upcomingHTML(cl){
 function upCard(c, cl, fresh){
   const days = (c.dates||[]).slice().sort((a,b)=>a.d.localeCompare(b.d));
   const line = kind => {
-    const list = days.filter(e => e.kind === kind);
+    // the shoot line also takes days of any unknown type, so no day goes missing
+    const list = days.filter(e => kind === "film" ? (e.kind === "film" || !KIND[e.kind]) : e.kind === kind);
     if (!list.length) return "";
     return `<div class="uprow"><span class="uplab">${kindName(kind)}</span><span class="updays">${list.map(e => {
       const st = dayStatus(c,e); const off = st==="released"||st==="canceled"||st==="declined";
@@ -772,13 +818,13 @@ function upCard(c, cl, fresh){
   };
   const du = c.status === "pending" ? dueText(c.respondBy) : null;
   const acts = replyHTML(c);
-  const got = c.received ? (c.received === TODAY ? "today" : c.received === key(new Date(Date.now() - 864e5)) ? "yesterday" : fmtDay(c.received)) : "";
+  const got = c.received ? (c.received === TODAY ? "today" : c.received === addDays(TODAY, -1) ? "yesterday" : fmtDay(c.received)) : "";
   return `<article class="up ${clsS(c.status)}-edge${fresh ? " fresh" : ""}">
     ${fresh ? `<div class="freshline">${c.newInfo ? "● " + esc(c.newInfoText || "Updated by a later email") : "● New availability check"}${got ? " · received " + got : ""}</div>` : ""}
     <div class="uphead" data-open="${c.id}" role="button" tabindex="0">
       <span class="upst ${clsS(c.status)}">${esc(MEANS[c.status]||c.status)}</span>
       <h4>${esc(nameOf(c))}</h4>
-      <div class="upmeta">${outsideBadge(c.location || c.filmLocation || c.fitLocation || (c.dates||[]).map(e=>e.loc).find(Boolean) || "")} ${esc([c.agency, c.role].filter(Boolean).join(" · "))}${du?` · <b class="due${du.late?" late":""}">${esc(du.txt)}</b>`:""}${c.review?` · <b style="color:var(--accent)">check details</b>`:""}${c.newInfo?` <span class="newinfo" title="${esc(c.newInfoText||"")}">● Updated</span>`:""}</div>
+      <div class="upmeta">${outsideBadge(c.location || c.filmLocation || c.fitLocation || (c.dates||[]).map(e=>e.loc).find(Boolean) || "")} ${c.agency ? `<b class="ag">${esc(c.agency)}</b>` : ""}${c.agency && c.role ? " · " : ""}${esc(c.role || "")}${du?` · <b class="due${du.late?" late":""}">${esc(du.txt)}</b>`:""}${c.review?` · <b style="color:var(--accent)">check details</b>`:""}${c.newInfo?` <span class="newinfo" title="${esc(c.newInfoText||"")}">● Updated</span>`:""}</div>
     </div>
     ${line("fit")}${line("reh")}${line("film")}
     ${(c.answers||[]).length ? `<details class="answers"><summary>Your answers on the agency page</summary><ul>${c.answers.map(a => `<li>${esc(a)}</li>`).join("")}</ul></details>` : ""}
@@ -795,7 +841,7 @@ function evHTML({c,e}){
 function renderCalls(){
   const agencies = [...new Set(callList().map(c => c.agency).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   let list = callList();
-  const groups = {review:"review", open:["pending","available","confirmed"], pending:["pending"], available:["available"], confirmed:["confirmed"], done:["done"], declined:["declined"], closed:["released","canceled","expired"], all:null};
+  const groups = {review:"review", open:["pending","available","confirmed"], pending:["pending"], available:["available"], confirmed:["confirmed"], done:["done"], declined:["declined"], closed:["released","canceled","expired","lapsed"], all:null};
   const g = groups[S.listStatus];
   if (g === "review") list = list.filter(c => c.review);
   else if (g) list = list.filter(c => g.includes(c.status));
@@ -812,7 +858,7 @@ function renderCalls(){
   else list.sort(sorters[S.sort]);
   let h = `<div class="bar">
     <input class="inp" id="q" type="search" placeholder="Search project, role, place…" value="${esc(S.q)}" style="flex:1 1 220px">
-    <select class="inp" id="statusSel" aria-label="Status">${[["open","Open (new, available, confirmed)"],["review","From email – to check"],["pending","New – reply needed"],["available","Available"],["confirmed","Confirmed"],["done","Done"],["declined","Declined"],["closed","Released / canceled / expired"],["all","All calls"]].map(([v,l]) => `<option value="${v}"${S.listStatus===v?" selected":""}>${l}</option>`).join("")}</select>
+    <select class="inp" id="statusSel" aria-label="Status">${[["open","Open (new, available, confirmed)"],["review","From email – to check"],["pending","New – reply needed"],["available","Available"],["confirmed","Confirmed"],["done","Done"],["declined","Declined"],["closed","Released / canceled / expired / not booked"],["all","All calls"]].map(([v,l]) => `<option value="${v}"${S.listStatus===v?" selected":""}>${l}</option>`).join("")}</select>
     <select class="inp" id="agencySel" aria-label="Agency"><option value="">All agencies</option>${agencies.map(a => `<option${S.agency===a?" selected":""}>${esc(a)}</option>`).join("")}</select>
     <select class="inp" id="sortSel" aria-label="Sort">${[["next","Next date"],["received","Newest received"],["reply","Reply deadline"],["project","Project A–Z"]].map(([v,l]) => `<option value="${v}"${S.sort===v?" selected":""}>Sort: ${l}</option>`).join("")}</select>
   </div><div class="src">${list.length} of ${S.calls.size} calls</div><div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Available – waiting to hear</span><span><i class="sw s-pending"></i>New</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day: yellow → blue → grey → back</span></div><div class="list">`;
@@ -823,9 +869,9 @@ function renderCalls(){
     const shown = ds.slice(0, 40);
     h += `<article class="row"><span class="stripe ${clsS(c.status)}"></span>
       <div class="body" data-open="${c.id}" role="button" tabindex="0">
-        <div class="line1"><span class="proj">${esc(nameOf(c))}</span><span class="pill ${clsS(c.status)}">${SMAP[c.status]?.short||c.status}</span>${c.attention?`<span class="flag">● Attention</span>`:""}${c.newInfo?`<span class="newinfo" title="${esc(c.newInfoText||"")}">● Updated${c.newInfoText?" – "+esc(c.newInfoText):""}</span>`:""}</div>
-        <div class="meta">${c.agency?`<span><b>${esc(c.agency)}</b></span>`:""}${c.role?`<span>${esc(c.role)}</span>`:""}${(c.location||c.filmLocation)?`<span>📍 ${esc(c.location||c.filmLocation)}</span>`:""}${c.received?`<span>Received ${fmtDM(c.received)}</span>`:""}</div>
-        ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"||st==="declined"; return `<button type="button" class="dchip ${clsS(st)} ${e.kind}${off?" off":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${kindName(e.kind)} · ${SMAP[st].short} · ${DAY_TIP}">${e.kind!=="film"?kindLetter(e.kind)+" ":""}${fmtDay(e.d)}${e.night?" ☾":""}${st==="done"?" ✓":""}${e.answer==="no"?" ✕":""}</button>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
+        <div class="line1"><span class="proj">${esc(nameOf(c))}</span><span class="pill ${clsS(c.status)}">${esc(SMAP[c.status]?.short||c.status)}</span>${c.attention?`<span class="flag">● Attention</span>`:""}${c.newInfo?`<span class="newinfo" title="${esc(c.newInfoText||"")}">● Updated${c.newInfoText?" – "+esc(c.newInfoText):""}</span>`:""}</div>
+        <div class="meta">${c.agency?`<span><b>${esc(c.agency)}</b></span>`:""}${c.role?`<span>${esc(c.role)}</span>`:""}${(c.location||c.filmLocation)?`<span>📍 ${esc(c.location||c.filmLocation)}</span>`:""}${c.received?`<span>Received ${fmtDay(c.received)}</span>`:""}</div>
+        ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"||st==="declined"; return `<button type="button" class="dchip ${clsS(st)} ${e.kind}${off?" off":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${kindName(e.kind)} · ${esc(SMAP[st]?.short || st)} · ${DAY_TIP}">${e.kind!=="film"?kindLetter(e.kind)+" ":""}${fmtDay(e.d)}${e.night?" ☾":""}${st==="done"?" ✓":""}${e.answer==="no"?" ✕":""}</button>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
         ${du?`<span class="due${du.late?" late":""}">${esc(du.txt)}</span>`:""}
       </div>
       <div class="acts">${replyHTML(c)}${c.status==="confirmed" && lastDate(c) && lastDate(c) < TODAY ? `<button class="btn small" data-set="done" data-id="${c.id}">Mark done</button>` : ""}</div>
@@ -839,7 +885,7 @@ function renderCalls(){
 /* ---------- stats ---------- */
 const OUT = [
   {k:"booked",  label:"Booked / worked", st:["confirmed","done"], color:"var(--st-confirmed)"},
-  {k:"yes",     label:"Accepted, not booked", st:["available","released","canceled"], color:"var(--st-available)"},
+  {k:"yes",     label:"Accepted, not booked", st:["available","released","canceled","lapsed"], color:"var(--st-available)"},
   {k:"no",      label:"Declined", st:["declined"], color:"var(--st-declined)"},
   {k:"new",     label:"No reply", st:["pending","expired"], color:"var(--faint)"},
 ];
@@ -850,9 +896,10 @@ function renderStats(){
   const all = callList();
   const now = new Date();
   const wk = key(weekStart(now)), mo = key(monthStart(now));
+  const nextWk = addDays(wk, 7), nextMo = key(new Date(now.getFullYear(), now.getMonth()+1, 1));   // upper limits, so future jobs don't count
   const withD = all.filter(c => basisDate(c));
-  const thisWeek = withD.filter(c => basisDate(c) >= wk).length;
-  const thisMonth = withD.filter(c => basisDate(c) >= mo).length;
+  const thisWeek = withD.filter(c => basisDate(c) >= wk && basisDate(c) < nextWk).length;
+  const thisMonth = withD.filter(c => basisDate(c) >= mo && basisDate(c) < nextMo).length;
   const answered = all.filter(c => c.status !== "pending" && c.status !== "expired");
   const yes = answered.filter(c => c.status !== "declined").length;
   const booked = all.filter(c => c.status === "confirmed" || c.status === "done").length;
@@ -862,7 +909,7 @@ function renderStats(){
   let h = `<div class="bar"><div class="seg" role="group" aria-label="Count calls by"><button data-basis="received" aria-pressed="${S.basis==="received"}">By date received</button><button data-basis="work" aria-pressed="${S.basis==="work"}">By first work date</button></div>
     <span class="src">${S.basis==="received" && fallback ? `${fallback} imported calls have no received date, so they count on their first work date.` : ""}</span></div>
   <div class="kpis">
-    <div class="kpi"><span class="l">This week</span><span class="n">${thisWeek}</span><span class="s">calls since Mon ${fmtDM(wk)}</span></div>
+    <div class="kpi"><span class="l">This week</span><span class="n">${thisWeek}</span><span class="s">calls since ${fmtDay(wk)}</span></div>
     <div class="kpi"><span class="l">This month</span><span class="n">${thisMonth}</span><span class="s">calls in ${MONTHS[now.getMonth()]}</span></div>
     <div class="kpi"><span class="l">Accept rate</span><span class="n">${answered.length ? Math.round(yes/answered.length*100) : 0}%</span><span class="s">${yes} accepted · ${answered.length-yes} declined</span></div>
     <div class="kpi"><span class="l">Booked</span><span class="n">${booked}</span><span class="s">confirmed or worked, all time</span></div>
@@ -896,8 +943,8 @@ function hbars(rows, n){
 function weekChart(list){
   const end = weekStart(new Date()); const weeks = [];
   for (let i = 15; i >= 0; i--){ const s = new Date(end); s.setDate(end.getDate()-7*i); weeks.push(key(s)); }
-  const counts = weeks.map((w,i) => { const nx = i<15 ? weeks[i+1] : "9999"; return list.filter(c => { const d = basisDate(c); return d >= w && d < nx; }).length; });
-  return barSVG(weeks.map((w,i) => ({label: i%2===0 ? fmtDM(w) : "", full:`Week of ${fmtDM(w)}`, segs:[{v:counts[i], color:"var(--accent)", name:"calls"}]})));
+  const counts = weeks.map((w,i) => { const nx = i<15 ? weeks[i+1] : addDays(w, 7); return list.filter(c => { const d = basisDate(c); return d >= w && d < nx; }).length; });
+  return barSVG(weeks.map((w,i) => ({label: i%4===0 ? fmtDay(w) : "", full:`Week of ${fmtDay(w)}`, segs:[{v:counts[i], color:"var(--accent)", name:"calls"}]})));
 }
 function monthChart(list){
   const now = new Date(); const months = [];
@@ -944,7 +991,10 @@ function openEditor(id, preset){
   draft = structuredClone(preset || (id ? S.calls.get(id) : blankCall()));
   if (id && draft.newInfo && S.canWrite !== false){ S.db.collection("calls").doc(id).update({newInfo: false}).catch(() => {}); draft.newInfo = false; }
   delete draft.id;
-  draft.dates = (draft.dates||[]).slice().sort((a,b)=>a.d.localeCompare(b.d));
+  // tidy() may show a different status (e.g. "done"); edit and save the real one
+  if (draft.tidied) draft.status = draft.tidied;
+  delete draft.tidied;
+  draft.dates = (draft.dates||[]).slice().sort((a,b)=>(a.d||"").localeCompare(b.d||""));
   drawEditor();
 }
 /* every email about this job, newest first, so you can check what the robot read */
@@ -998,13 +1048,19 @@ function drawEditor(){
       ${(d.answers||[]).length ? `<div class="fld"><span class="lbl">Your answers on the agency page</span><ul class="anslist">${d.answers.map(a => `<li>${esc(a)}</li>`).join("")}</ul></div>` : ""}
       ${draftId && (d.links||[]).length ? `<div class="fld"><span class="lbl">Agency reply links</span><div style="display:flex;gap:6px;flex-wrap:wrap">${d.links.map(l => `<a class="btn small" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.kind==="yes"?"✓ "+l.text:l.kind==="no"?"✕ "+l.text:"Reply to agency")} ↗</a>`).join("")}</div></div>` : ""}
       ${emailsHTML(d)}
-      ${draftId ? `<div class="src">Source: ${esc(d.source||"")}${d.updatedAt?` · updated ${esc(d.updatedAt.slice(0,16).replace("T"," "))}`:""}</div>` : ""}
+      ${draftId ? `<div class="src">Source: ${esc(d.source||"")}${d.updatedAt?` · updated ${esc(ukTime(d.updatedAt))}`:""}</div>` : ""}
       ${confirmDel ? `<div class="confirm"><span>Delete this call for good?</span><button class="btn small danger" data-delyes>Delete</button><button class="btn small" data-delno>Keep</button></div>` : ""}
     </div>
     <footer><button class="btn primary" data-save ${ro?"disabled":""}>${draftId?"Save changes":"Add to schedule"}</button><button class="btn ghost" data-close>Cancel</button><span style="flex:1"></span>${draftId?`<button class="btn danger small" data-del ${ro?"disabled":""}>Delete</button>`:""}</footer>
   </aside>`;
 }
 let preset_note = "";
+/* a saved time shown in UK time (handles GMT/BST) */
+function ukTime(iso){
+  const t = new Date(iso);
+  if (isNaN(t)) return String(iso);
+  return t.toLocaleString("en-GB", {timeZone:"Europe/London", day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit"});
+}
 function pullForm(){
   if (!draft) return;
   const v = id => { const el = $("#"+id, layer); return el ? el.value.trim() : ""; };
@@ -1015,12 +1071,18 @@ function pullForm(){
   const at = $("#f-attn", layer); if (at) draft.attention = at.checked;
   draft.dates = draft.dates.map((e,i) => {
     const dd = $("#dd-"+i, layer); if (!dd) return e;
-    const o = {d: dd.value, kind: $("#dk-"+i, layer).value};
-    const l = $("#dl-"+i, layer).value.trim(); if (l) o.loc = l;
-    const ct = $("#dct-"+i, layer)?.value; if (ct) o.callTime = ct;
-    if ($("#dn-"+i, layer).checked) o.night = true;
+    // start from the saved day so extra fields (answer, note…) are kept
+    const o = {...e, d: dd.value, kind: $("#dk-"+i, layer).value};
+    // the place box shows callPlace if the day has one, else loc – write it back to the same field
+    const placeField = e.callPlace ? "callPlace" : "loc";
+    const l = $("#dl-"+i, layer).value.trim();
+    if (l) o[placeField] = l; else delete o[placeField];
+    const ct = $("#dct-"+i, layer)?.value;
+    if (ct) o.callTime = ct; else delete o.callTime;
+    if ($("#dn-"+i, layer).checked) o.night = true; else delete o.night;
     const st = $("#dst-"+i, layer).value;
-    if (st) o.state = st;
+    delete o.done;                                   // the day box now says it all
+    if (st) o.state = st; else delete o.state;
     return o;
   });
 }
@@ -1029,6 +1091,7 @@ async function saveDraft(){
   if (!draft.project){ toast("Add the production name first"); $("#f-project", layer)?.focus(); return; }
   draft.dates = draft.dates.filter(e => /^\d{4}-\d\d-\d\d$/.test(e.d)).sort((a,b)=>a.d.localeCompare(b.d));
   const body = {...draft, review: false, reviewReason: "", updatedAt: new Date().toISOString()};
+  delete body.tidied;                               // display-only, never saved
   if (!draftId) body.createdAt = body.updatedAt;
   const id = draftId || ("c" + Date.now().toString(36) + Math.random().toString(36).slice(2,6));
   try {
@@ -1039,7 +1102,7 @@ async function saveDraft(){
 }
 async function setStatus(id, st){
   const c = S.calls.get(id); if (!c) return;
-  try { await S.db.collection("calls").doc(id).update({status: st, updatedAt: new Date().toISOString()}); toast(`${c.project}: ${SMAP[st].short}`); }
+  try { await S.db.collection("calls").doc(id).update({status: st, updatedAt: new Date().toISOString()}); toast(`${nameOf(c)}: ${SMAP[st]?.short || st}`); }
   catch (e) { writeFailed(e); }
 }
 function writeFailed(e){
@@ -1102,7 +1165,7 @@ function exportCSV(){
 }
 function exportBackup(){
   const all = {};
-  for (const c of callList()){ const {id, ...rest} = c; all[id] = rest; }
+  for (const [id, rest] of (S.raw || new Map())) all[id] = rest;   // the saved data, not the tidied view
   saveFile(`filming-schedule-backup-${TODAY}.json`, JSON.stringify(all), "application/json");
 }
 function openMenu(){
@@ -1184,6 +1247,10 @@ document.addEventListener("click", e => {
   if (a) setStatus(a.dataset.id, a.dataset.quick);
 });
 $("#addBtn").addEventListener("click", openImporter);
+// coming back to the app (e.g. next morning): redraw so "today" is right
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && S.loaded && S.calls.size && !(layer.innerHTML && draft)) render();
+});
 $("#exportBtn").addEventListener("click", openMenu);
 
 /* tooltips for charts */
@@ -1273,14 +1340,16 @@ function showLogin(msg){
   let unsub = null;
   firebase.auth().onAuthStateChanged(user => {
     if (unsub){ unsub(); unsub = null; }
-    if (!user){ S.loaded = false; S.calls = new Map(); showLogin(); return; }
+    if (!user){ S.loaded = false; S.calls = new Map(); S.raw = new Map(); showLogin(); return; }
     S.userEmail = user.email;
     $("#addBtn").hidden = false; $("#exportBtn").hidden = false;
     main.innerHTML = `<div class="empty"><h2>Loading your calls</h2></div>`;
     // EP sign-in code: when the EP robot asks, a yellow box appears at the top
     db.collection("ep").doc("code").onSnapshot(d => showEpCode(d.exists ? d.data() : null), () => {});
     unsub = db.collection("calls").onSnapshot({includeMetadataChanges: true}, snap => {
-      S.calls = new Map(snap.docs.map(d => [d.id, tidy({id: d.id, ...d.data()})]));
+      S.raw = new Map(snap.docs.map(d => [d.id, d.data()]));   // exactly what's in the database
+      TODAY = key(new Date());
+      retidy();                                                // what you see (old jobs tidied)
       S.loaded = true;
       setSync(snap.metadata.fromCache ? "" : "live", snap.metadata.fromCache ? "Offline copy" : `Live · ${S.calls.size} calls`);
       if (!S.calls.size){

@@ -194,56 +194,73 @@ async function notifyPhone(call) {
   }
 }
 
-// Booking confirmation / release email: find the ONE matching call and mark it Confirmed or
-// Released. Matching, in order: same production name (+ agency if several) → same reply-link
-// code → same agency with one of the listed days. A booking with no match becomes a new booked
-// job (some jobs are booked without an availability email). Returns the call's id, or null.
+// ---------- which job is this email about? ----------
+// Several agencies can send the same production, and each one is its own job: an email from
+// Extra People never changes a Casting Collective job. Agency names are compared loosely
+// ("Two 10 Casting" = "Two10", "Lucas Extras" = "Lucas").
+function canonAgency(a) {
+  return String(a || "").toLowerCase().replace(/\b(ltd|limited|casting|extras?|agency|uk|talent|management|the)\b/g, "").replace(/[^a-z0-9]/g, "");
+}
+function sameAgency(a, b) { const x = canonAgency(a), y = canonAgency(b); return !!x && x === y; }
+function overlaps(c, listed) { return (c.dates || []).some(e => listed.has(e.d)); }
+// Returns { job, why }. Order: same EP message page → named production (same agency only; when the
+// email names a production we never fall back to another job) → same agency + same days →
+// (releases) the one live job from that agency → (answers) the one recent new request from that agency.
+function matchJob(kind, r, links, received, statuses) {
+  const pool = existingCalls.filter(c => c.id && statuses.includes(c.status));
+  const agencyKnown = !!canonAgency(r.agency);
+  const sameAg = c => !agencyKnown || !canonAgency(c.agency) || sameAgency(c.agency, r.agency);
+  const listed = new Set((r.dates || []).map(x => x.d));
+  const ep = portalLink({ links: (links || []).filter(l => l.kind === "respond") });
+  if (ep) { const byPage = pool.filter(c => portalLink(c) === ep); if (byPage.length) return { job: pickOne(byPage) }; }
+  if (r.project) {
+    const named = existingCalls.filter(c => c.id && c.project && closeName(c.project, r.project) && sameAg(c));
+    if (named.length) {
+      let m = pool.filter(c => named.includes(c));
+      if (m.length > 1 && listed.size) { const byDay = m.filter(c => overlaps(c, listed)); if (byDay.length) m = byDay; }
+      if (m.length > 1) m = [pickOne(m)];
+      return m.length ? { job: m[0] } : { job: null, why: "job is " + [...new Set(named.map(c => c.status))].join("/") };
+    }
+    if (existingCalls.some(c => c.project && closeName(c.project, r.project))) return { job: null, why: "only another agency has this production" };
+  }
+  if (agencyKnown && listed.size) {
+    const byDay = pool.filter(c => sameAgency(c.agency, r.agency) && overlaps(c, listed) && c.status !== "released");
+    if (byDay.length === 1) return { job: byDay[0] };
+  }
+  if (!r.project && agencyKnown && kind === "released") {
+    const since = String(received || "").slice(0, 10);
+    const live = pool.filter(c => ["available", "confirmed", "pending"].includes(c.status) && sameAgency(c.agency, r.agency) &&
+      (c.dates || []).some(e => e.d >= since && (!listed.size || listed.has(e.d))));
+    const acted = live.filter(c => c.status !== "pending");
+    if (acted.length === 1) return { job: acted[0] };
+    if (live.length === 1) return { job: live[0] };
+  }
+  if (!r.project && agencyKnown && kind === "replied") {
+    const from = new Date(new Date((received || londonDate()) + "T12:00:00Z").getTime() - 21 * 864e5).toISOString().slice(0, 10);
+    const recent = pool.filter(c => c.status === "pending" && sameAgency(c.agency, r.agency) && (c.received || "") >= from && (c.received || "") <= (received || "9999"));
+    if (recent.length === 1) return { job: recent[0] };
+  }
+  return { job: null, why: !r.project ? "no name in email" : "no job with that name" };
+}
+// an older email must not undo a newer one (e.g. a release read after a later booking)
+function olderThanStatus(c, received) { return !!(c.statusAt && received && received < c.statusAt); }
+
 async function applyStatusEmail(kind, r, subject, received, skipId, links, source) {
   await loadExistingCalls();
   // a booking is the final word, so it can also revive a job marked declined, canceled or expired
   const okStatus = kind === "booked" ? ["pending", "available", "confirmed", "released", "declined", "canceled", "expired"] : ["pending", "available", "confirmed", "released"];
-  const open = existingCalls.filter(c => c.id && c.id !== skipId && okStatus.includes(c.status));
   const listed = new Set((r.dates || []).map(x => x.d));
-  let matches = r.project ? open.filter(c => c.project && sameProject(c.project, r.project)) : [];
-  if (matches.length > 1 && r.agency) {
-    const sameAgency = matches.filter(c => sameName(c.agency, r.agency));
-    if (sameAgency.length) matches = sameAgency;
-  }
-  if (matches.length > 1) matches = matches.filter(c => c.status !== "released");
-  if (matches.length > 1 && (!r.agency || matches.every(c => sameName(c.agency, matches[0].agency)))) matches = [pickOne(matches)];
-  // still several (same production via different agencies): the one with the days this email lists
-  if (matches.length > 1 && listed.size) {
-    const byDay = matches.filter(c => (c.dates || []).some(e => listed.has(e.d)));
-    if (byDay.length === 1) matches = byDay;
-  }
-  const codes = linkCodes(links);
-  if (matches.length !== 1 && codes.size) {
-    const byCode = open.filter(c => [...linkCodes(c.links)].some(x => codes.has(x)));
-    if (byCode.length === 1) matches = byCode;
-  }
-  if (matches.length !== 1 && r.agency && listed.size) {
-    const byDay = open.filter(c => c.status !== "released" && sameName(c.agency, r.agency) && (c.dates || []).some(e => listed.has(e.d)));
-    if (byDay.length === 1) matches = byDay;
-  }
-  if (matches.length !== 1 && kind === "released" && r.agency) {
-    // no name in the release: the one job from that agency you're still on, with days ahead of the email
-    const since = String(received || "").slice(0, 10);
-    const live = open.filter(c => ["available", "confirmed", "pending"].includes(c.status) && sameName(c.agency, r.agency) &&
-      (c.dates || []).some(e => e.d >= since && (!listed.size || listed.has(e.d))));
-    const acted = live.filter(c => c.status !== "pending");
-    if (acted.length === 1) matches = acted; else if (live.length === 1) matches = live;
-  }
+  const found = matchJob(kind, r, links, received, okStatus);
+  const matches = found.job && found.job.id !== skipId ? [found.job] : [];
   if (matches.length !== 1) {
-    const anyStatus = r.project ? existingCalls.filter(c => c.project && sameProject(c.project, r.project)) : [];
-    miss(`${kind}: ` + (!r.project ? "no name in email" : matches.length > 1 ? "several jobs match" :
-      anyStatus.length ? "job found but it is " + [...new Set(anyStatus.map(c => c.status))].join("/") : "no job with that name") +
-      (listed.size ? "" : ", no dates"));
+    miss(`${kind}: ${found.why || "no match"}` + (listed.size ? "" : ", no dates"));
     // a booking we can't link to any request: add it as its own booked job
-    if (kind === "booked" && source && r.project && (r.dates || []).length) {
+    if (kind === "booked" && source && r.project) {
       const call = buildCall(r, source);
       call.status = "confirmed";
       call.review = true;
-      call.reviewReason = "Made from a booking email (no matching availability check found). Check the dates";
+      call.reviewReason = "Made from a booking email (no availability check from this agency found)" + ((r.dates || []).length ? ". Check the dates" : ". The email gave no dates – add them");
+      call.statusAt = received;
       call.notes = "Booked by email on " + received + ": " + String(subject).slice(0, 120);
       const id = "b" + source.key;
       await enrichFromPortal(call);
@@ -257,18 +274,27 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
     return null;
   }
   const c = matches[0];
+  if (olderThanStatus(c, received)) { miss(`${kind}: older than the job's latest news`); return c.id; }
   if (kind === "released" && c.status === "released") return c.id;
   // "Not required for filming on 3rd Oct": only those days are released when the job has other days
   if (kind === "released" && listed.size && (c.dates || []).some(e => !listed.has(e.d))) {
     const dates = c.dates.map(e => ({ ...e }));
     let hit = false;
     dates.forEach(e => { if (listed.has(e.d) && e.state !== "released") { e.state = "released"; hit = true; } });
-    if (hit) { await db.collection("calls").doc(c.id).update({ dates, updatedAt: new Date().toISOString() }); c.dates = dates; }
+    // every day released or canceled → the whole job is released
+    const allOff = dates.every(e => ["released", "canceled"].includes(e.state));
+    if (hit || allOff) {
+      const ch = { dates, updatedAt: new Date().toISOString(), statusAt: received };
+      if (allOff && c.status !== "released") ch.status = "released";
+      await db.collection("calls").doc(c.id).update(ch);
+      Object.assign(c, ch);
+    }
     return c.id;
   }
   const status = kind === "booked" ? "confirmed" : "released";
   const note = (kind === "booked" ? "Booked" : "Released") + " by email on " + received + ": " + String(subject).slice(0, 120);
-  const changes = { status: status, updatedAt: new Date().toISOString() };
+  const changes = { status: status, statusAt: received, updatedAt: new Date().toISOString() };
+  const wasBooked = c.status === "confirmed";
   if (!String(c.notes || "").includes(note)) changes.notes = (c.notes ? c.notes + " • " : "") + note;
   // A booking email that lists dates: those days are booked (green). Days it says are "on hold /
   // pencilled / tbc", and shoot days it doesn't mention, stay yellow (still available, not confirmed).
@@ -279,8 +305,9 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
     const dates = (c.dates || []).map(e => ({ ...e }));
     dates.forEach(e => {
       if (hold.has(e.d)) { if (!e.state || e.state === "released" || e.state === "canceled") e.state = "available"; }
-      else if (listed.has(e.d)) { if (["released", "canceled", "available"].includes(e.state)) delete e.state; }
-      else if ((!e.state || (REBUILD && e.state === "released")) && ((e.kind === "film" && listsFilm) || (e.kind === "fit" && listsFit))) e.state = "available";
+      else if (listed.has(e.d)) { if (["released", "canceled", "available", "pending"].includes(e.state)) delete e.state; }
+      // days this booking doesn't mention stay yellow — unless you were already booked for them
+      else if (!wasBooked && (!e.state || (REBUILD && e.state === "released")) && ((e.kind === "film" && listsFilm) || (e.kind === "fit" && listsFit))) e.state = "available";
       // (re-reading: days an older version greyed out become yellow again; later release emails grey them properly)
     });
     r.dates.forEach(x => {
@@ -327,8 +354,9 @@ function findTwin(call) {
     if (byPage.length) return pickOne(byPage);
   }
   if (!call.project) return null;
+  // same production from the SAME agency (another agency's request is a different job)
   const pool = existingCalls.filter(c => c.id && c.project && closeName(c.project, call.project) &&
-    (!c.agency || !call.agency || sameName(c.agency, call.agency)) && closeInTime(c, call));
+    canonAgency(c.agency) && canonAgency(call.agency) && sameAgency(c.agency, call.agency) && closeInTime(c, call));
   const active = pool.filter(c => ACTIVE.includes(c.status));
   if (active.length) return pickOne(active);
   // a closed job (released, declined...): only a reminder with no new days counts as the same
@@ -393,14 +421,17 @@ async function logEmail(callId, m, kind) {
 async function mergeDuplicates() {
   existingCalls = null;
   await loadExistingCalls();
-  const rank = { confirmed: 6, done: 5, available: 4, pending: 3, released: 2, canceled: 2, declined: 2, expired: 1 };
+  // the copy with the "furthest along" status wins (a release beats a reminder that came earlier)
+  const rank = { done: 8, confirmed: 7, released: 6, canceled: 6, declined: 5, available: 4, pending: 3, expired: 2, lapsed: 2 };
   const dayFor = { done: "worked", available: "available", pending: "pending", released: "released", canceled: "canceled", declined: "canceled", expired: "canceled" };
   const used = new Set();
   let merged = 0;
   for (const a of existingCalls) {
     if (used.has(a.id) || !a.project) continue;
-    const group = existingCalls.filter(b => !used.has(b.id) && b.project && closeName(a.project, b.project) &&
-      (!a.agency || !b.agency || sameName(a.agency, b.agency)) && closeInTime(a, b));
+    // only copies from the same agency (a copy with no agency joins only if just one agency is involved)
+    let group = existingCalls.filter(b => !used.has(b.id) && b.project && closeName(a.project, b.project) && closeInTime(a, b));
+    const agencies = new Set(group.map(g => canonAgency(g.agency)).filter(Boolean));
+    if (agencies.size > 1) group = canonAgency(a.agency) ? group.filter(g => sameAgency(g.agency, a.agency)) : [];
     const robot = group.filter(g => String(g.source || "").startsWith("email"));
     if (group.length < 2 || !robot.length) continue;
     group.forEach(g => used.add(g.id));
@@ -413,7 +444,8 @@ async function mergeDuplicates() {
     const finalStatus = members.slice().sort(byRank)[0].status;
     // days: each copy's days keep the colour they had
     const dates = [];
-    members.forEach(mem => (mem.dates || []).forEach(e => {
+    // days of the copies that already have the final status come first and keep their colour
+    members.slice().sort((x, y) => (y.status === finalStatus) - (x.status === finalStatus)).forEach(mem => (mem.dates || []).forEach(e => {
       if (dates.some(x => x.d === e.d)) return;
       const day = { ...e };
       if (!day.state && mem.status !== finalStatus && dayFor[mem.status]) day.state = dayFor[mem.status];
@@ -477,17 +509,16 @@ function buildCall(r, src) {
 // the call time + place on that day. Adds the day if the job didn't have it yet.
 async function applyCallTime(r, ct, subject) {
   await loadExistingCalls();
-  const booked = existingCalls.filter(c => c.id && ["confirmed", "available"].includes(c.status));
-  let match = r.project ? booked.filter(c => c.project && sameProject(c.project, r.project)) : [];
   const day = ct.dates.length ? ct.dates[0].d : null;
-  if (match.length > 1) match = [pickOne(match)];
-  if (match.length !== 1 && day) match = booked.filter(c => c.status === "confirmed" && (c.dates || []).some(e => e.d === day));
-  if (match.length > 1) match = [pickOne(match)];
-  if (match.length !== 1) {
-    const anyStatus = r.project ? existingCalls.filter(c => c.project && sameProject(c.project, r.project)) : [];
-    miss("calltime: " + (!r.project ? "no name" : anyStatus.length ? "job is " + [...new Set(anyStatus.map(c => c.status))].join("/") : "no job with that name") + (day ? "" : ", no date"));
-    return null;
+  const found = matchJob("calltime", { ...r, dates: ct.dates }, [], null, ["confirmed", "available"]);
+  let match = found.job ? [found.job] : [];
+  // no name: the one booked job (same agency if known) that has that day
+  if (!match.length && !r.project && day) {
+    match = existingCalls.filter(c => c.id && c.status === "confirmed" && (c.dates || []).some(e => e.d === day) &&
+      (!canonAgency(r.agency) || sameAgency(c.agency, r.agency)));
+    if (match.length > 1) match = [];
   }
+  if (match.length !== 1) { miss("calltime: " + (found.why || "no match") + (day ? "" : ", no date")); return null; }
   const c = match[0];
   const dates = (c.dates || []).map(e => ({ ...e }));
   const d = day || (dates.filter(e => e.d >= new Date().toISOString().slice(0, 10)).sort((a, b) => a.d.localeCompare(b.d))[0] || {}).d;
@@ -577,10 +608,13 @@ async function enrichFromPortal(call) {
   if (!call.location) call.location = r.location || (r.dates.find(d => d.loc) || {}).loc || "";
   // dates: add the ones the page lists (keeps your own day changes)
   const dates = (call.dates || []).map(e => ({ ...e }));
+  // New days are only added to a new or unanswered job (so days you deleted don't come back).
+  // The page's day type (fitting / rehearsal / shoot) is more reliable than the email's.
+  const mayAdd = !call.id || call.status === "pending";
   r.dates.forEach(x => {
     const have = dates.find(e => sameDay(e, x));
-    if (!have) dates.push({ d: x.d, kind: x.kind, ...(x.loc ? { loc: x.loc } : {}), ...(x.night ? { night: true } : {}) });
-    else { if (!have.loc && x.loc) have.loc = x.loc; if (x.kind === "reh" && have.kind === "film") have.kind = "reh"; }
+    if (!have) { if (mayAdd) dates.push({ d: x.d, kind: x.kind, ...(x.loc ? { loc: x.loc } : {}), ...(x.night ? { night: true } : {}) }); }
+    else { if (!have.loc && x.loc) have.loc = x.loc; if (x.kind && x.kind !== have.kind && !have.state) have.kind = x.kind; }
   });
   dates.sort((a, b) => a.d.localeCompare(b.d));
   call.dates = dates;
@@ -607,10 +641,10 @@ async function enrichFromPortal(call) {
     if (answers.length) call.answers = answers.slice(0, 12);
     if (yes || no) portal.answered++;
     // what you ticked on the EP page is the final word on your answer
-    if (yes && ["pending", "declined", "expired"].includes(call.status)) call.status = "available";
-    else if (no && !yes && ["pending", "available"].includes(call.status)) call.status = "declined";
+    if (yes && (["pending", "expired"].includes(call.status) || (call.status === "declined" && call.declinedBy === "robot"))) { call.status = "available"; call.declinedBy = ""; }
+    else if (no && !yes && ["pending", "available"].includes(call.status)) { call.status = "declined"; call.declinedBy = "robot"; }
   }
-  if (call.project && call.dates.length) { call.review = false; call.reviewReason = ""; }
+  if (call.project && call.dates.length && /^Couldn't find/.test(call.reviewReason || "")) { call.review = false; call.reviewReason = ""; }
   return true;
 }
 // every 20 minutes, look again at EP pages of calls you haven't answered yet (max 6 per run)
@@ -635,9 +669,15 @@ async function refreshPendingPortalPages() {
     const before = JSON.stringify([c.status, c.project, c.dates, c.answers]);
     const copy = { ...c };
     await enrichFromPortal(copy);
-    const { id, ...body } = copy;
     const changed = JSON.stringify([copy.status, copy.project, copy.dates, copy.answers]) !== before;
-    await db.collection("calls").doc(c.id).update(changed ? { ...body, updatedAt: new Date().toISOString() } : { portalCheckedAt: copy.portalCheckedAt });
+    // write only what the page changed, so an edit you made in the app meanwhile isn't overwritten
+    const ch = { portalCheckedAt: copy.portalCheckedAt };
+    if (changed) {
+      for (const k of ["status", "project", "dates", "answers", "replied", "declinedBy", "role", "rate", "respondBy", "location", "review", "reviewReason"])
+        if (copy[k] !== undefined && JSON.stringify(copy[k]) !== JSON.stringify(c[k])) ch[k] = copy[k];
+      ch.updatedAt = new Date().toISOString();
+    }
+    await db.collection("calls").doc(c.id).update(ch);
     Object.assign(c, copy);
   }
 }
@@ -660,25 +700,21 @@ function linkCodes(links) {
 }
 // "Thank you for letting us know that you are available": find the call you answered.
 // 1) same code in the links, 2) same production + agency, 3) the only unanswered call from that agency.
-async function applyReply(r, links, answer) {
+async function applyReply(r, links, answer, received) {
   await loadExistingCalls();
-  const open = existingCalls.filter(c => c.id && ["pending", "available"].includes(c.status));
-  const codes = linkCodes(links);
-  let match = codes.size ? open.filter(c => [...linkCodes(c.links)].some(x => codes.has(x))) : [];
-  if (match.length !== 1 && r.project) match = open.filter(c => c.project && sameProject(c.project, r.project) && (!r.agency || sameName(c.agency, r.agency)));
-  if (match.length !== 1 && r.agency) {
-    const recent = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    match = open.filter(c => c.status === "pending" && sameName(c.agency, r.agency) && (c.received || "") >= recent);
-  }
-  if (match.length !== 1) return null;
-  const c = match[0];
-  const copy = { ...c, status: c.status === "pending" ? answer : c.status };
-  if (c.status === "pending" || c.status !== answer) copy.status = answer;
+  const found = matchJob("replied", r, links, received, ["pending", "available", "declined"]);
+  const c = found.job;
+  if (!c) { miss("reply: " + (found.why || "no match")); return null; }
+  if (olderThanStatus(c, received)) return c.id;
+  if (c.status === "declined" && c.declinedBy !== "robot") return c.id;        // you set it yourself
+  const copy = { ...c, status: answer };
   if (portalLink(c)) await enrichFromPortal(copy);       // the EP page shows what you really ticked
   if (copy.status === c.status && JSON.stringify(copy.dates) === JSON.stringify(c.dates)) return c.id;
-  const { id, ...body } = copy;
-  await db.collection("calls").doc(c.id).set({ ...body, repliedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-  Object.assign(c, copy);
+  const changes = { status: copy.status, dates: copy.dates || [], statusAt: received || londonDate(), repliedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  changes.declinedBy = copy.status === "declined" ? "robot" : "";
+  if (copy.answers) changes.answers = copy.answers;
+  await db.collection("calls").doc(c.id).update(changes);
+  Object.assign(c, changes);
   return c.id;
 }
 
@@ -758,6 +794,7 @@ async function connect(account) {
   await client.connect();
   return client;
 }
+const rebuildItems = [];      // re-read mode: emails from BOTH accounts, sorted by date before handling
 async function checkAccount(account) {
   const counts = { looked: 0, alreadySeen: 0, notACall: 0, added: 0, updated: 0, folders: 0, skipped: 0 };
   let client = await connect(account);
@@ -781,10 +818,8 @@ async function checkAccount(account) {
     }
   }
   try { if (client.usable) await client.logout(); } catch (_) {}
-  if (REBUILD) {
-    all.sort((a, b) => a.date - b.date);                // oldest first: request → answer → booking → call time
-    for (const item of all) await handleMail(item, account, counts, true);
-  }
+  // re-read mode: the emails are worked through later, together with the other account's, oldest first
+  if (REBUILD) { all.forEach(x => { x.counts = counts; }); rebuildItems.push(...all); }
   return counts;
 }
 
@@ -866,10 +901,18 @@ async function checkFolder(client, account, counts, folder, collect) {
       received: londonDate(mail.date), account,
     };
     if (collect) { if (!collect.some(x => x.key === key)) collect.push(item); }
-    else await handleMail(item, account, counts, false);
+    else await safeHandle(item, account, counts, false);
   }
 }
 
+// one email that goes wrong must not stop the others (it's counted and skipped next time)
+async function safeHandle(item, account, counts, rereading) {
+  try { await handleMail(item, account, counts, rereading); }
+  catch (e) {
+    counts.errors = (counts.errors || 0) + 1;
+    try { await item.seenRef.set({ at: new Date().toISOString(), call: null, error: String(e.code || e.name || "error") }); markSeen(item.key); } catch (_) {}
+  }
+}
 // work out what one email means and update the schedule
 async function handleMail(m, account, counts, rereading) {
   const { key, seenRef, subject, text, html, from, received } = m;
@@ -909,8 +952,9 @@ async function handleMail(m, account, counts, rereading) {
         const r2 = parseEmail({ subject: "", fromName: from.name, fromEmail: from.address, html: page, text: "", received });
         if (!r2.agency) r2.agency = r.agency;
         knownName(r2, "", ptext);
-        const k2 = /(have|has) been released|you('| a)re released|released from|not (required|selected|needed)|stood down|(has|have) been cancel+ed/i.test(ptext) ? "released"
-                 : /(have|has) been booked|you('| a)re booked|booking (is )?confirmed|confirmed booking/i.test(ptext) ? "booked" : null;
+        // a booking is checked first; a release needs a clear sentence about YOU or the job
+        const k2 = /(have|has) been booked|you('| a)re booked|booking (is )?confirmed|confirmed booking/i.test(ptext) ? "booked"
+                 : /(you have|you've) been released|you('| a)re released|released you|you are not (required|needed)|not (required|needed) for (filming|this job|the shoot)|not been selected|stood down|(job|booking|filming|shoot) (has been )?cancel+ed/i.test(ptext) ? "released" : null;
         if (k2) {
           epu[k2]++;
           callId = await applyStatusEmail(k2, r2, subject, received, null, links, m.trash ? null : { ...m, key, html: page, text: ptext });
@@ -937,7 +981,7 @@ async function handleMail(m, account, counts, rereading) {
   // The agency confirming your answer: mark the call Available or Declined
   if (kind === "replied") {
     stats.replied[0]++;
-    const callId = await applyReply(r, extractLinks(html).concat(allUrls(html)), replyAnswer(subject, text));
+    const callId = await applyReply(r, extractLinks(html).concat(allUrls(html)), replyAnswer(subject, text), received);
     if (callId) { counts.updated++; stats.replied[1]++; }
     await remember(callId);
     return;
@@ -1130,6 +1174,7 @@ async function handleMail(m, account, counts, rereading) {
   }
 
   let failed = false;
+  const accountCounts = [];
   for (let i = 0; i < accounts.length; i++) {
     try {
       let c;
@@ -1140,6 +1185,8 @@ async function handleMail(m, account, counts, rereading) {
         await new Promise(r => setTimeout(r, 15000));   // Yahoo sometimes drops the first connection: wait and try once more
         c = await checkAccount(accounts[i]);
       }
+      accountCounts.push([i, c]);
+      if (REBUILD) continue;                                // reported after the emails are handled
       report("notice", `Account ${i + 1}`, `Looked at ${c.looked} emails in ${c.folders} folders${c.skipped ? ` (${c.skipped} folders could not be opened)` : ""}: ${c.alreadySeen} already seen, ${c.notACall} not availability checks, ${c.added} new calls added, ${c.updated} calls updated (booked/released).`);
     } catch (err) {
       failed = true;
@@ -1148,6 +1195,12 @@ async function handleMail(m, account, counts, rereading) {
                 : (err.code || err.name || "unknown error") + (err.responseText ? " - " + String(err.responseText).slice(0, 120) : "");
       report("error", `Account ${i + 1}`, "Could not check this inbox: " + why);
     }
+  }
+  if (REBUILD) {
+    // oldest first across both inboxes: request → answer → booking → release → call time
+    rebuildItems.sort((a, b) => a.date - b.date);
+    for (const item of rebuildItems) await safeHandle(item, item.account, item.counts, true);
+    for (const [i, c] of accountCounts) report("notice", `Account ${i + 1}`, `Looked at ${c.looked} emails in ${c.folders} folders: ${c.alreadySeen} already seen, ${c.notACall} not availability checks, ${c.added} new calls added, ${c.updated} calls updated${c.errors ? `, ${c.errors} emails skipped after an error` : ""}.`);
   }
   if (REBUILD) {
     existingCalls = null;

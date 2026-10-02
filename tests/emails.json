@@ -339,5 +339,379 @@
     "2026-11-13 film"
    ]
   }
+ },
+ {
+  "name": "EP fitting heading then filming grid",
+  "email": {
+   "subject": "Availability request for Falcon",
+   "fromName": "ExtraPeople",
+   "fromEmail": "noreply@extrapeople.uk.epcastingportal.com",
+   "received": "2026-10-01",
+   "html": "<p>You have an availability enquiry for:</p><p>Falcon</p><p><u>Costume Fitting</u></p><p>You will need a costume fitting before filming.</p>\n<h4>Mandatory dates</h4><table><tr><td><b>26 Oct 2026</b><br>(Costume fitting in Epsom)</td><td><input type=\"radio\" checked disabled> Available <input type=\"radio\" disabled> Not available</td></tr>\n<tr><td><b>30 Oct 2026</b><br>(Filming in Epsom)</td></tr></table><p>Sent by ExtraPeople</p>",
+   "text": ""
+  },
+  "expect": {
+   "isCall": true,
+   "project": "Falcon",
+   "agency": "Extra People",
+   "dates": [
+    "2026-10-26 fit",
+    "2026-10-30 film"
+   ]
+  }
+ },
+ {
+  "name": "EP rehearsal heading then filming grid",
+  "email": {
+   "subject": "Availability request for Falcon",
+   "fromName": "ExtraPeople",
+   "fromEmail": "noreply@extrapeople.uk.epcastingportal.com",
+   "received": "2026-10-01",
+   "html": "<p>You have an availability enquiry for:</p><p>Falcon</p><p><u>Rehearsal and filming dates</u></p>\n<table><tr><td><b>28 Oct 2026</b><br>(Rehearsals in Epsom)</td></tr><tr><td><b>30 Oct 2026</b><br>(Filming in Epsom)</td></tr></table>",
+   "text": ""
+  },
+  "expect": {
+   "isCall": true,
+   "project": "Falcon",
+   "dates": [
+    "2026-10-28 reh",
+    "2026-10-30 film"
+   ]
+  }
+ },
+ {
+  "name": "Label after date",
+  "email": {
+   "subject": "Casting Collective - Availability Request ( NIGHTJAR )",
+   "fromName": "Priya Steer",
+   "fromEmail": "priya@castingcollective.co.uk",
+   "received": "2026-10-01",
+   "text": "Project Title: | NIGHTJAR\nRole: | Commuter\nDates: 12 Oct (fitting), 14 Oct (shoot)\nLocation: | London"
+  },
+  "expect": {
+   "isCall": true,
+   "project": "NIGHTJAR",
+   "agency": "Casting Collective",
+   "role": "Commuter",
+   "dates": [
+    "2026-10-12 fit",
+    "2026-10-14 film"
+   ]
+  }
+ },
+ {
+  "name": "Costume cell not a fitting",
+  "email": {
+   "subject": "Wilkins Casting Ltd. 1st Option With Kestrel TVC - Shopper",
+   "fromName": "Erica Mousah",
+   "fromEmail": "bookings@wilkinscastingagency.com",
+   "received": "2026-10-01",
+   "text": "Wilkins Casting Agency\nCompany | Kestrel TVC\nProduct | Shopper\nCostume: smart casual, no outfit with logos | Wed 14 Oct 2026\nTIME | Time TBC"
+  },
+  "expect": {
+   "isCall": true,
+   "project": "Kestrel TVC",
+   "agency": "Wilkins Casting",
+   "role": "Shopper",
+   "dates": [
+    "2026-10-14 film"
+   ]
+  }
+ },
+ {
+  "name": "Call time and dress size not dates",
+  "email": {
+   "subject": "Availability Check - Merlin",
+   "fromName": "Key Casting",
+   "fromEmail": "bookings@keycasting.co.uk",
+   "received": "2026-10-01",
+   "text": "Project: Merlin\nRole: Diner\nShoot: Saturday 14th November\nCall 06.11 at unit base, wrap approx 19.00\nCall time 07.10 for SAs\nDress size 10/12 please\nThis is a 1/2 day fitting if booked - episodes 3/4\nOld reference 2026/11/04"
+  },
+  "expect": {
+   "isCall": true,
+   "project": "Merlin",
+   "agency": "Key Casting",
+   "role": "Diner",
+   "dates": [
+    "2026-11-14 film"
+   ]
+  }
+ },
+ {
+  "name": "2nd unit / option ordinals",
+  "email": {
+   "subject": "AV Check - Heron",
+   "fromName": "True Edge",
+   "fromEmail": "casting@trueedge.co.uk",
+   "received": "2026-10-01",
+   "text": "PRODUCTION: Heron\nROLE: Pedestrian\n2nd unit shoot on Sat 14th Nov - 1st or 2nd option, 1st/2nd option, no 3rd party agents, 18th century costume, 2nd series"
+  },
+  "expect": {
+   "isCall": true,
+   "project": "Heron",
+   "agency": "True Edge",
+   "role": "Pedestrian",
+   "dates": [
+    "2026-11-14 film"
+   ]
+  }
+ },
+ {
+  "name": "Confirm-by deadline",
+  "email": {
+   "subject": "'Swallow' - Monday 5th October",
+   "fromName": "On Set Extras",
+   "fromEmail": "info@onsetextras.co.uk",
+   "received": "2026-09-28",
+   "text": "Hi All,\nPlease let us know who's available for the following -\nProduction - Swallow\nRoles - Shoppers\nShoot Date - Monday 5th October @ Ealing Studios\nPlease confirm your availability by Friday 2nd October 12:00\nKind Regards"
+  },
+  "expect": {
+   "isCall": true,
+   "project": "Swallow",
+   "agency": "On Set Extras",
+   "role": "Shoppers",
+   "respondBy": "2026-10-02T12:00",
+   "dates": [
+    "2026-10-05 film"
+   ]
+  }
+ },
+ {
+  "name": "Respond before same line",
+  "email": {
+   "subject": "Availability request for Kingfisher",
+   "fromName": "ExtraPeople",
+   "fromEmail": "noreply@extrapeople.uk.epcastingportal.com",
+   "received": "2026-09-30",
+   "text": "You have an availability enquiry for:\nKingfisher\nPlease respond before: Friday 2 October 2026 09:00 | Filming: Fri 30 Oct 2026 in Epsom"
+  },
+  "expect": {
+   "isCall": true,
+   "project": "Kingfisher",
+   "agency": "Extra People",
+   "respondBy": "2026-10-02T09:00",
+   "dates": [
+    "2026-10-30 film"
+   ]
+  }
+ },
+ {
+  "name": "Other deadline wordings",
+  "email": {
+   "subject": "Availability Check - Starling",
+   "fromName": "Universal Extras",
+   "fromEmail": "info@universalextras.co.uk",
+   "received": "2026-09-28",
+   "text": "Project: Starling\nShoot: Wed 7th October\nLet me know by Sunday 4th Oct\nOr get back to me no later than Thursday 8th Oct\nThis offer will expire on Sunday 4 Oct at 23:59"
+  },
+  "expect": {
+   "isCall": true,
+   "project": "Starling",
+   "respondBy": "2026-10-04T23:59",
+   "dates": [
+    "2026-10-07 film"
+   ]
+  }
+ },
+ {
+  "name": "Numeric deadline",
+  "email": {
+   "subject": "Availability Check - Robin 2",
+   "fromName": "Universal Extras",
+   "fromEmail": "info@universalextras.co.uk",
+   "received": "2026-09-28",
+   "text": "Project: Robin 2\nShoot: Wed 7th October\nPlease respond by 04/10/2026 17:00"
+  },
+  "expect": {
+   "isCall": true,
+   "respondBy": "2026-10-04T17:00",
+   "dates": [
+    "2026-10-07 film"
+   ]
+  }
+ },
+ {
+  "name": "Respond-if keeps dates",
+  "email": {
+   "subject": "Casting Collective - Availability Request ( PLOVER )",
+   "fromName": "Priya Steer",
+   "fromEmail": "priya@castingcollective.co.uk",
+   "received": "2026-10-01",
+   "text": "Project Title: | PLOVER\nPlease respond if you are available on 14th and 15th October\nLocation: | London"
+  },
+  "expect": {
+   "isCall": true,
+   "project": "PLOVER",
+   "respondBy": null,
+   "dates": [
+    "2026-10-14 film",
+    "2026-10-15 film"
+   ]
+  }
+ },
+ {
+  "name": "Cross-month range",
+  "email": {
+   "subject": "BBB Availability Check - Wren",
+   "fromName": "BBB Talent Team",
+   "fromEmail": "info@bbbtalentagency.com",
+   "received": "2026-10-01",
+   "text": "Dear Artist,\nWe would like to check your availability to work on- Wren\nShoot: 30th Oct - 3rd Nov\nThis is an availability check not a booking confirmation."
+  },
+  "expect": {
+   "isCall": true,
+   "project": "Wren",
+   "dates": [
+    "2026-10-30 film",
+    "2026-10-31 film",
+    "2026-11-01 film",
+    "2026-11-02 film",
+    "2026-11-03 film"
+   ]
+  }
+ },
+ {
+  "name": "Cross-year range",
+  "email": {
+   "subject": "BBB Availability Check - Robin",
+   "fromName": "BBB Talent Team",
+   "fromEmail": "info@bbbtalentagency.com",
+   "received": "2026-12-01",
+   "text": "Shoot: 28th Dec - 2nd Jan"
+  },
+  "expect": {
+   "isCall": true,
+   "dates": [
+    "2026-12-28 film",
+    "2026-12-29 film",
+    "2026-12-30 film",
+    "2026-12-31 film",
+    "2027-01-01 film",
+    "2027-01-02 film"
+   ]
+  }
+ },
+ {
+  "name": "Full-name range",
+  "email": {
+   "subject": "Availability enquiry for Monday 2nd November - Friday 6th November",
+   "fromName": "Sabell Casting",
+   "fromEmail": "noreply@sabell.uk.epcastingportal.com",
+   "received": "2026-10-01",
+   "text": "Please respond to this availability enquiry as soon as possible, it will automatically expire by Monday 26 Oct 23:59\nHi there\nI would like to put you forward for the following job."
+  },
+  "expect": {
+   "isCall": true,
+   "agency": "Sabell Casting",
+   "respondBy": "2026-10-26T23:59",
+   "dates": [
+    "2026-11-02 film",
+    "2026-11-03 film",
+    "2026-11-04 film",
+    "2026-11-05 film",
+    "2026-11-06 film"
+   ]
+  }
+ },
+ {
+  "name": "Slash list 4/5/6 Nov",
+  "email": {
+   "subject": "Availability enquiry for Swift",
+   "fromName": "LucasExtras",
+   "fromEmail": "noreply@lucasextras.uk.epcastingportal.com",
+   "received": "2026-10-20",
+   "text": "Project: Swift\nDates: Nov 4/5/6\nAlso possible: 4/5/6 Nov\nRole: Diners"
+  },
+  "expect": {
+   "isCall": true,
+   "project": "Swift",
+   "role": "Diners",
+   "dates": [
+    "2026-11-04 film",
+    "2026-11-05 film",
+    "2026-11-06 film"
+   ]
+  }
+ },
+ {
+  "name": "Weekday fixes a wrong year",
+  "email": {
+   "subject": "Availability Check - Pigeon",
+   "fromName": "Universal Extras",
+   "fromEmail": "info@universalextras.co.uk",
+   "received": "2026-09-28",
+   "text": "Project: Pigeon\nShoot: Wed 14 Oct 2025"
+  },
+  "expect": {
+   "isCall": true,
+   "project": "Pigeon",
+   "dates": [
+    "2026-10-14 film"
+   ]
+  }
+ },
+ {
+  "name": "Office closure footer",
+  "email": {
+   "subject": "Availability Check - Robin",
+   "fromName": "Universal Extras",
+   "fromEmail": "info@universalextras.co.uk",
+   "received": "2026-10-01",
+   "text": "Hi,\nAre you available to film on Thursday 15th October?\nProject: Robin\nOur office is closed on Friday 9th October for training.\n\nFrom: Universal Extras\nSent: Monday 28 September 2026 10:00\nDate: Mon, 28 Sep 2026\nOn Mon 28 Sep 2026, Jo Bloggs <jo@universalextras.co.uk> wrote:"
+  },
+  "expect": {
+   "isCall": true,
+   "project": "Robin",
+   "agency": "Universal Extras",
+   "dates": [
+    "2026-10-15 film"
+   ]
+  }
+ },
+ {
+  "name": "No fitting needed is still a call",
+  "email": {
+   "subject": "Supporting artists needed - Magpie",
+   "fromName": "Casting Collective",
+   "fromEmail": "priya@castingcollective.co.uk",
+   "received": "2026-10-01",
+   "text": "Hi, are you available for the below?\nProject Title: | MAGPIE\nShoot: Wed 21st October\nA costume fitting is not required for this role. You won't need a fitting."
+  },
+  "expect": {
+   "isCall": true,
+   "kind": "call",
+   "project": "MAGPIE",
+   "dates": [
+    "2026-10-21 film"
+   ]
+  }
+ },
+ {
+  "name": "Photos request not a call",
+  "email": {
+   "subject": "New photos needed - please update by 30th November",
+   "fromName": "Casting Collective",
+   "fromEmail": "priya@castingcollective.co.uk",
+   "received": "2026-10-01",
+   "text": "Hi, please upload new headshots to your profile by 30th November so we can put you forward for more work."
+  },
+  "expect": {
+   "isCall": false,
+   "kind": null
+  }
+ },
+ {
+  "name": "Not selected on an AV check is a release",
+  "email": {
+   "subject": "Availability check - Falcon",
+   "fromName": "ExtraPeople",
+   "fromEmail": "noreply@extrapeople.uk.epcastingportal.com",
+   "received": "2026-10-01",
+   "text": "Thank you for your availability. Unfortunately you have not been selected this time."
+  },
+  "expect": {
+   "isCall": true,
+   "kind": "released"
+  }
  }
 ]
