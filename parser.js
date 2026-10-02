@@ -369,6 +369,9 @@
         var f = found[k];
         var year = f.y || guessYear(f.mo, f.d, received);
         if (!validDay(year, f.mo, f.d)) continue;
+        // a date with no year that would be more than ~7 months away is almost always something else
+        // on the page (a footer, an old date): extras jobs are not booked that far ahead
+        if (!f.y && (new Date(year, f.mo - 1, f.d) - new Date(received + "T12:00:00")) / 864e5 > 210) continue;
         // the kind of day: a word in the same line wins ("available to fit on 14 Aug")
         var before = lower.slice(0, f.at);
         var fitPos = Math.max(before.lastIndexOf("fit"), before.lastIndexOf("costume"));

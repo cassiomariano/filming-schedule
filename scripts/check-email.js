@@ -1009,6 +1009,19 @@ async function handleMail(m, account, counts, rereading) {
   if (REBUILD || process.env.CLEANUP === "true") {
     report("notice", "Agencies", `${knownAgencies.length} known agency names.`);
     const n = await mergeDuplicates();
+    // remove far-away dates an older reader picked up from page footers (e.g. "Fri 18 Jun" next year)
+    let odd = 0;
+    for (const c of existingCalls) {
+      if (!String(c.source || "").startsWith("email") || !c.received) continue;
+      const lim = new Date(new Date(c.received + "T12:00:00Z").getTime() + 210 * 864e5).toISOString().slice(0, 10);
+      const keep = (c.dates || []).filter(e => e.d <= lim || e.callTime || e.state === "worked");
+      if (keep.length !== (c.dates || []).length) {
+        odd += c.dates.length - keep.length;
+        await db.collection("calls").doc(c.id).update({ dates: keep });
+        c.dates = keep;
+      }
+    }
+    report("notice", "Odd dates", `Removed ${odd} far-away dates picked up by mistake.`);
     report("notice", "Duplicates", `Merged ${n} duplicate copies into their jobs.`);
   }
   if (SURVEY) {
