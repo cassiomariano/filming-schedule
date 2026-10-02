@@ -80,7 +80,8 @@ async function signIn(page) {
   // EP may show a hand-over page with one "Submit" button (it normally sends itself on)
   for (let i = 0; i < 6 && !page.url().startsWith(PORTAL); i++) {
     await page.waitForTimeout(3000);
-    const bad = await page.evaluate(() => /incorrect|invalid|not recogni|locked|try again/i.test(document.body.innerText));
+    // a wrong password keeps you on the password screen with an error message
+    const bad = (await pass().count()) && await page.evaluate(() => /incorrect|invalid|not recogni|locked/i.test(document.body.innerText));
     if (bad) { report("error", "EP sign-in", "EP says the email or password isn't right (or the account is locked). Check the secrets."); return false; }
     const handover = page.locator("button:has-text('Submit'):visible, input[type=submit][value*=Submit i]:visible").first();
     if (!page.url().startsWith(PORTAL) && (await handover.count()) && !(await pass().count())) await handover.click().catch(() => {});
@@ -104,6 +105,7 @@ async function signIn(page) {
   let failed = 0;
   try {
     for (let i = 0; i < logins.length; i++) {
+      if (process.env.EP_ONLY && String(i + 1) !== process.env.EP_ONLY) continue;
       LOGIN = logins[i];
       const context = await browser.newContext({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36", viewport: { width: 1366, height: 900 } });
       const page = await context.newPage();

@@ -9,6 +9,9 @@ on:
         description: "Private export (sealed) of the payments pages to the vault branch"
         type: boolean
         default: true
+      only:
+        description: "Only this EP account (1 or 2); empty = both"
+        default: ""
 
 concurrency:
   group: ep-payments
@@ -37,6 +40,7 @@ jobs:
           EP_PASSWORD_2: ${{ secrets.EP_PASSWORD_2 }}
           ET_EMAIL_1: ${{ secrets.ET_EMAIL_1 }}
           ET_EMAIL_2: ${{ secrets.ET_EMAIL_2 }}
+          EP_ONLY: ${{ github.event.inputs.only || '' }}
           EP_EXPORT: ${{ github.event.inputs.export || 'true' }}
       - name: Put the sealed export on the vault branch
         if: ${{ github.event.inputs.export != 'false' && hashFiles('export.sealed.json') != '' }}
