@@ -163,7 +163,13 @@ async function signIn(page) {
     // a wrong password keeps you on the password screen with an error message
     if (await isCodeScreen(page)) break;                   // the code step comes next
     const bad = (await pass().count()) && await page.evaluate(() => /incorrect|invalid|not recogni|locked/i.test(document.body.innerText));
-    if (bad) { report("error", "EP sign-in", "EP says the email or password isn't right (or the account is locked). Check the secrets."); return false; }
+    if (bad) {
+      const words = await page.evaluate(() => ["incorrect", "invalid", "not recogni", "locked", "try again", "required", "captcha", "robot", "attempts"]
+        .filter(w => document.body.innerText.toLowerCase().includes(w)));
+      if (i < 2) continue;                                  // give the page a few seconds first
+      report("error", "EP sign-in", `Still on the password screen. Words on the page: ${words.join(", ") || "none"} · ${await describeForm(page)}`);
+      return false;
+    }
     const handover = page.locator("button:has-text('Submit'):visible, input[type=submit][value*=Submit i]:visible").first();
     if (!page.url().startsWith(PORTAL) && (await handover.count()) && !(await pass().count())) await handover.click().catch(() => {});
   }
