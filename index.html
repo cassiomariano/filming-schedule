@@ -322,6 +322,11 @@ textarea.inp{min-height:84px;resize:vertical}
 .up.fresh{box-shadow:0 0 0 1px var(--accent)}
 .freshline{font-size:12px;font-weight:700;color:var(--accent);margin-bottom:4px}
 .newinfo{font-size:11.5px;font-weight:700;color:var(--accent);margin-left:6px;white-space:nowrap}
+.pageshot{border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--surface-2);margin-bottom:12px}
+.ps-head{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px;font-size:14px}
+.ps-head .src{flex:1}
+.pageshot img{display:block;width:100%;max-height:520px;object-fit:cover;object-position:top;border-radius:6px;border:1px solid var(--line);background:#fff;cursor:zoom-in}
+.pageshot img.full{max-height:none;cursor:zoom-out}
 .mails{display:flex;flex-direction:column;gap:6px;margin-top:6px}
 .mails details{border:1px solid var(--line);border-radius:8px;background:var(--surface-2);padding:6px 10px}
 .mails summary{cursor:pointer;font-size:13px}
@@ -1243,13 +1248,27 @@ function openEditor(id, preset){
   delete draft.tidied;
   draft.dates = (draft.dates||[]).slice().sort((a,b)=>(a.d||"").localeCompare(b.d||""));
   drawEditor();
+  if (id && draft.pageShotAt) loadPageShot(id);
+}
+/* the picture of the EP page with your ticks (taken by the robot every hour); loaded only when you open the job */
+const shotCache = new Map();
+async function loadPageShot(id){
+  try {
+    let p = shotCache.get(id);
+    if (!p){ const doc = await S.db.collection("pages").doc(id).get(); p = doc.exists ? doc.data() : null; if (p) shotCache.set(id, p); }
+    const box = document.getElementById("pageShot");
+    if (!box || draftId !== id) return;
+    if (!p || !p.img){ box.remove(); return; }
+    box.innerHTML = `<div class="ps-head"><b>Your answer on the agency page</b><span class="src">picture taken ${esc(ukWhen(p.at))}</span>${p.url ? `<a class="maplink" href="${esc(p.url)}" target="_blank" rel="noopener">Open page ↗</a>` : ""}</div>
+      <img src="${p.img}" alt="Picture of the agency page with your answer" title="Tap to see the whole page" onclick="this.classList.toggle('full')">`;
+  } catch (e) { document.getElementById("pageShot")?.remove(); }
 }
 /* every email about this job, newest first, so you can check what the robot read */
 const MAIL_KIND = {call:"Availability check", booked:"Booking", released:"Release", replied:"Answer received", calltime:"Call time", epupdate:"EP update", merged:"Earlier copy"};
 function emailsHTML(d){
   const list = (d.emails||[]).slice().sort((a,b) => String(b.date||"").localeCompare(String(a.date||"")));
   if (!list.length) return d.rawEmail ? `<details class="more"><summary>Original email</summary><pre class="raw">${esc(d.rawEmail)}</pre></details>` : "";
-  return `<details class="more"><summary>Emails about this job <span class="src">${list.length}</span></summary><div class="mails">${list.map(m =>
+  return `<details class="more"><summary>Emails about this job <span class="src">${list.length} · tap one to read it</span></summary><div class="mails">${list.map(m =>
     `<details><summary><span class="k">${esc(MAIL_KIND[m.kind]||m.kind||"Email")}</span>${m.date?esc(fmtDay(m.date))+" · ":""}${esc(m.subject||"")}</summary><pre class="raw">${esc(m.text||"")}</pre></details>`).join("")}</div></details>`;
 }
 function closeSheet(){ layer.innerHTML = ""; draft = null; draftId = null; payId = null; }
@@ -1261,6 +1280,7 @@ function drawEditor(){
     <div class="content">
       ${!draftId && preset_note ? `<div class="review-note">${esc(preset_note)}</div>` : ""}
       ${draftId && d.review ? `<div class="review-note">Added automatically from your email. ${d.reviewReason ? esc(d.reviewReason) + "." : ""} Check the details and save to clear this note.</div>` : ""}
+      ${draftId && d.pageShotAt ? `<section class="pageshot" id="pageShot"><div class="ps-head"><b>Your answer on the agency page</b><span class="src">loading picture…</span></div></section>` : ""}
       ${draftId ? robotHTML(d) : ""}
       <div class="fld agbox"><label for="f-agency">Agency${draftId ? " – move this job to another agency" : ""}</label><input class="inp" id="f-agency" list="agencies" value="${esc(d.agency)}">${agencyListHTML("agencies")}<span class="src">Each agency's request is its own job. Booked through a different agency? Change it here — the robot will match that agency's emails to this job from now on.</span></div>
       <div class="fld"><span class="lbl">Status</span><div class="status-pick">${STATUSES.map(s => `<button type="button" class="${clsS(s.k)}" data-st="${s.k}" aria-pressed="${d.status===s.k}">${s.short}</button>`).join("")}</div></div>

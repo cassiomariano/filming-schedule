@@ -1,0 +1,33 @@
+# Takes a picture of each open job's EP message page (no login, no clicks) so the app can show
+# exactly what you answered. Runs every hour; you can also run it by hand from the Actions tab.
+name: EP pictures
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      all:
+        description: "Retake every picture now"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ep-snapshots
+
+jobs:
+  pictures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --omit=dev
+      - run: npm i --no-save playwright@1 && npx playwright install --with-deps chromium
+      - run: node scripts/ep-snapshots.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          ALL: ${{ github.event.inputs.all || 'false' }}
