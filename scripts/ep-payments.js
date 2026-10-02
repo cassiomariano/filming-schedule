@@ -74,8 +74,18 @@ async function signIn(page) {
   }
   if (!(await pass().count())) { report("error", "EP sign-in", "Couldn't find the password box."); return false; }
   await pass().fill(LOGIN.password);
-  await submit().click();
-  try { await page.waitForURL(u => String(u).startsWith(PORTAL), { timeout: 45000 }); }
+  // press "Sign in" itself (not "Forgot password?" or "Back")
+  const signBtn = page.locator("button:has-text('Sign in'):visible, button:has-text('Sign In'):visible, button:has-text('Sign On'):visible, button:has-text('Log in'):visible").first();
+  await ((await signBtn.count()) ? signBtn : submit()).click();
+  // EP may show a hand-over page with one "Submit" button (it normally sends itself on)
+  for (let i = 0; i < 6 && !page.url().startsWith(PORTAL); i++) {
+    await page.waitForTimeout(3000);
+    const bad = await page.evaluate(() => /incorrect|invalid|not recogni|locked|try again/i.test(document.body.innerText));
+    if (bad) { report("error", "EP sign-in", "EP says the email or password isn't right (or the account is locked). Check the secrets."); return false; }
+    const handover = page.locator("button:has-text('Submit'):visible, input[type=submit][value*=Submit i]:visible").first();
+    if (!page.url().startsWith(PORTAL) && (await handover.count()) && !(await pass().count())) await handover.click().catch(() => {});
+  }
+  try { await page.waitForURL(u => String(u).startsWith(PORTAL), { timeout: 30000 }); }
   catch (e) {
     report("error", "EP sign-in", "Didn't get back to the portal after signing in. What the page shows: " + await describeForm(page));
     return false;
