@@ -10,6 +10,7 @@
   "dependencies": {
     "firebase-admin": "^12.7.0",
     "imapflow": "^1.0.164",
-    "mailparser": "^3.7.1"
+    "mailparser": "^3.7.1",
+    "pdf-parse": "^1.1.1"
   }
 }

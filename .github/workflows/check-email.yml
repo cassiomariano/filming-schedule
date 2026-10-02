@@ -35,6 +35,13 @@ on:
         description: "Apply the sealed fixes in patch.sealed.json"
         type: boolean
         default: false
+      backup:
+        description: "Make a sealed backup now (it also happens every Sunday)"
+        type: boolean
+        default: false
+      restore:
+        description: "Restore a backup: type its date (YYYY-MM-DD) – replaces your jobs with that copy"
+        default: ""
       survey:
         description: "Count words in agency email subjects (counts only)"
         type: boolean
@@ -62,6 +69,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --omit=dev
+      - name: Fetch the backup to restore
+        if: ${{ github.event.inputs.restore != '' && github.event.inputs.restore != null }}
+        run: |
+          git clone -q --depth 1 -b backups "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" /tmp/b
+          cp "/tmp/b/backups/${{ github.event.inputs.restore }}.sealed.json" restore.sealed.json
       - run: node scripts/check-email.js
         env:
           DAYS_BACK: ${{ github.event.inputs.days_back || '2' }}
@@ -72,6 +84,8 @@ jobs:
           REBUILD: ${{ github.event.inputs.rebuild || 'false' }}
           EXPORT: ${{ github.event.inputs.export || 'false' }}
           PATCH: ${{ github.event.inputs.patch || 'false' }}
+          BACKUP: ${{ github.event.inputs.backup || 'false' }}
+          RESTORE: ${{ github.event.inputs.restore || '' }}
           SURVEY: ${{ github.event.inputs.survey || 'false' }}
           PORTAL_DEBUG: ${{ github.event.inputs.portal_debug == 'true' && 'yes' || '' }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
@@ -86,3 +100,13 @@ jobs:
           cd /tmp/v && git init -q -b vault && git add export.sealed.json
           git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -q -m "sealed export"
           git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" vault
+      - name: Keep the weekly backup on the backups branch (last 8)
+        if: ${{ hashFiles('backup.sealed.json') != '' }}
+        run: |
+          D=$(TZ=Europe/London date +%F)
+          if git clone -q --depth 1 -b backups "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" /tmp/bk 2>/dev/null; then :; else
+            mkdir /tmp/bk && cd /tmp/bk && git init -q -b backups && cd -; fi
+          mkdir -p /tmp/bk/backups && cp backup.sealed.json "/tmp/bk/backups/$D.sealed.json"
+          cd /tmp/bk && ls backups/*.sealed.json | sort | head -n -8 | xargs -r git rm -q --cached --ignore-unmatch 2>/dev/null; ls backups/*.sealed.json | sort | head -n -8 | xargs -r rm -f
+          git add -A && git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -q -m "backup $D"
+          git push -q "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" backups

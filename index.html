@@ -3,12 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#15181D">
+<meta name="theme-color" content="#15181D" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#07080A" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Filming">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
 <title>Filming Schedule</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -364,6 +366,76 @@ details.more summary{cursor:pointer;font-weight:600;display:flex;gap:8px;align-i
   .tabs{gap:0;-webkit-overflow-scrolling:touch}
   .tab{padding:8px 7px 10px;font-size:14px;letter-spacing:.03em;gap:4px;flex:none}
 }
+/* robot health chip (next to the sync badge): the dot is green, amber or red */
+.health{font-family:var(--f-mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;background:none;border:1px solid rgba(255,255,255,.2);color:var(--slate-ink);border-radius:20px;padding:2px 9px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;opacity:.85}
+.health:hover{opacity:1;border-color:rgba(255,255,255,.45)}
+.health i{width:8px;height:8px;border-radius:50%;display:inline-block;background:#7C818A}
+.health.green i{background:#78C043;box-shadow:0 0 0 3px rgba(120,192,67,.25)}
+.health.amber i{background:#F6D432;box-shadow:0 0 0 3px rgba(246,212,50,.25)}
+.health.red i{background:#E0372B;box-shadow:0 0 0 3px rgba(224,55,43,.3)}
+.health-lines{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+.hfacts{display:grid;grid-template-columns:auto 1fr;gap:8px 14px;margin:0;font-size:14px}
+.hfacts dt{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding-top:2px}
+.hfacts dd{margin:0}
+/* ---------- money ---------- */
+.kpi.m .n{font-size:32px}
+.mtable{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.mhead,.mrow{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.7fr) 92px 100px 120px 96px;gap:12px;padding:10px 14px;align-items:center}
+.mhead{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--surface-2);border-bottom:1px solid var(--line)}
+.mhead .num{text-align:right;font-size:11px}
+.mrow{width:100%;background:none;border:0;border-bottom:1px solid var(--line);font:inherit;color:inherit;text-align:left;cursor:pointer}
+.mrow:last-child{border-bottom:0}
+.mrow:hover{background:var(--surface-2)}
+.mrow .prod{min-width:0}
+.mrow .prod b{display:block;font-size:14.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mrow .prod small,.mrow .mdays small{display:block;font-size:12px;color:var(--muted)}
+.mrow .mdays{font-size:12.5px;min-width:0}
+.mnums{display:contents}
+.num{font-family:var(--f-mono);font-size:13px;font-variant-numeric:tabular-nums;text-align:right}
+.num small{display:block;font-size:11px;color:var(--muted)}
+.num .est{color:var(--faint)}
+.num .est small{display:inline}
+.mrow .pill{justify-self:end}
+.pay-over{background:var(--attn);color:#fff}
+.mmonth{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.mmonth .src{font-size:12px}
+.agt{display:grid;grid-template-columns:minmax(0,1fr) repeat(4,minmax(64px,auto));gap:6px 14px;font-size:13px;align-items:center}
+.agt .h{font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.agt .h.num{text-align:right}
+.agt .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+@media (max-width:760px){
+  .mhead{display:none}
+  .mrow{grid-template-columns:minmax(0,1fr) auto;gap:6px 12px}
+  .mrow .mdays{grid-column:1/-1}
+  .mrow .pill{grid-column:2;grid-row:1}
+  .mnums{display:flex;gap:16px;grid-column:1/-1;justify-content:flex-start}
+  .mnums .num{text-align:left}
+  .agt{grid-template-columns:minmax(0,1fr) repeat(4,auto);gap:6px 10px;font-size:12px}
+}
+/* "Fix this job" tools in the editor */
+.agbox{border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:10px 12px;background:var(--surface-2)}
+.fixrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.fixrow .inp{flex:1 1 220px}
+.splitdays{display:flex;flex-wrap:wrap;gap:6px}
+.splitdays label{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:6px;padding:4px 8px;background:var(--surface);font-size:13px;cursor:pointer}
+/* robot change history + merge picker in the editor */
+.robot{border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;background:var(--surface-2)}
+.robot .last{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px}
+.robot .last span{flex:1 1 220px}
+.robot ul{margin:0;padding-left:18px;font-size:12.5px;color:var(--muted)}
+.pick{border:1px solid var(--line);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px;background:var(--surface-2)}
+.tab .ti{display:none}
+/* phones: the tabs become a bar at the bottom of the screen, easy to reach with a thumb */
+@media (max-width:600px){
+  .tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--slate);border-top:1px solid rgba(255,255,255,.12);padding-bottom:env(safe-area-inset-bottom,0px);overflow:visible}
+  .tab{flex:1 1 0;flex-direction:column;justify-content:center;gap:2px;padding:8px 2px 9px;font-size:13px;min-height:56px;border-bottom:0;border-top:3px solid transparent;position:relative}
+  .tab[aria-selected="true"]{border-top-color:#F6D432}
+  .tab .ti{display:block;font-family:var(--f-body);font-size:18px;line-height:1}
+  .tab .count{position:absolute;top:4px;left:calc(50% + 8px)}
+  .top-inner{padding-bottom:12px}
+  main{padding-bottom:calc(88px + env(safe-area-inset-bottom,0px))}
+  .toast{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
+}
 </style>
 </head>
 <body>
@@ -373,15 +445,17 @@ details.more summary{cursor:pointer;font-weight:600;display:flex;gap:8px;align-i
       <span class="clap" aria-hidden="true"></span>
       <h1>Filming Schedule</h1>
       <span class="sync" id="sync"><i></i><span>Connecting…</span></span>
+      <button type="button" class="health" id="health" data-health hidden><i></i><span></span></button>
       <span class="spacer"></span>
       <button class="btn ghost small" id="exportBtn" hidden>Backup</button>
       <button class="btn primary" id="addBtn">+ Add availability check</button>
     </div>
     <nav class="tabs" role="tablist">
-      <button class="tab" role="tab" data-tab="calendar" aria-selected="true">Calendar</button>
-      <button class="tab" role="tab" data-tab="booked" aria-selected="false">Booked <span class="count" id="bookedCount" hidden></span></button>
-      <button class="tab" role="tab" data-tab="calls" aria-selected="false">Calls <span class="count" id="replyCount" hidden></span></button>
-      <button class="tab" role="tab" data-tab="stats" aria-selected="false">Stats</button>
+      <button class="tab" role="tab" data-tab="calendar" aria-selected="true"><span class="ti" aria-hidden="true">▦</span>Calendar</button>
+      <button class="tab" role="tab" data-tab="booked" aria-selected="false"><span class="ti" aria-hidden="true">✓</span>Booked <span class="count" id="bookedCount" hidden></span></button>
+      <button class="tab" role="tab" data-tab="calls" aria-selected="false"><span class="ti" aria-hidden="true">✉</span>Calls <span class="count" id="replyCount" hidden></span></button>
+      <button class="tab" role="tab" data-tab="stats" aria-selected="false"><span class="ti" aria-hidden="true">▤</span>Stats</button>
+      <button class="tab" role="tab" data-tab="money" aria-selected="false"><span class="ti" aria-hidden="true">£</span>Money</button>
     </nav>
   </div>
 </header>
@@ -585,6 +659,7 @@ function render(){
   if (S.tab === "calendar") renderCalendar();
   else if (S.tab === "booked") renderBooked();
   else if (S.tab === "calls") renderCalls();
+  else if (S.tab === "money") renderMoney();
   else renderStats();
 }
 
@@ -981,6 +1056,177 @@ function barSVG(cols){
   return s + `</svg>`;
 }
 
+/* ================= money: what each worked job should pay, and what has come in ================= */
+/* money is saved on the call as pay: {rate, extras, paid, paidOn, note} – numbers in pounds */
+/* £ amounts: whole pounds as "£110", pence as "£95.50" */
+function money(n){
+  const v = Math.round((n || 0) * 100) / 100;
+  const pence = v % 1 !== 0;
+  return v.toLocaleString("en-GB", {style:"currency", currency:"GBP", minimumFractionDigits: pence ? 2 : 0, maximumFractionDigits: 2});
+}
+/* a number, or null when the box is empty / not a number */
+const numOrNull = v => (v === null || v === undefined || v === "" || isNaN(Number(v))) ? null : Number(v);
+/* the first £ amount in the free-text rate, e.g. "£110 + OT" → 110 */
+function rateGuess(text){
+  const m = String(text || "").replace(/,/g, "").match(/£\s*(\d+(?:\.\d+)?)/);
+  return m ? Number(m[1]) : null;
+}
+const OVERDUE_DAYS = 45;
+const PAY_CHIP = {paid:["Paid","s-confirmed"], part:["Part paid","s-available"], unpaid:["Unpaid","s-canceled"], overdue:["Overdue","pay-over"]};
+/* UK tax year: 6 April to 5 April. Gives {from, to, label} for the year that holds day k */
+function taxYear(k){
+  const y = Number(k.slice(0, 4));
+  const start = k >= `${y}-04-06` ? y : y - 1;
+  return {from:`${start}-04-06`, to:`${start + 1}-04-05`, label:`${start}/${String(start + 1).slice(2)}`};
+}
+/* one entry per job with worked days (blue "done" days), newest first */
+function moneyJobs(){
+  const jobs = [];
+  for (const c of callList()){
+    const worked = (c.dates || []).filter(e => dayStatus(c, e) === "done").map(e => e.d).sort();
+    if (!worked.length) continue;
+    const p = c.pay || {};
+    const savedRate = numOrNull(p.rate);
+    const guess = savedRate === null ? rateGuess(c.rate) : null;   // shown as an estimate
+    const rate = savedRate ?? guess;
+    const extras = numOrNull(p.extras) || 0;
+    const paid = numOrNull(p.paid) || 0;
+    const expected = (rate || 0) * worked.length + extras;
+    const last = worked[worked.length - 1];
+    const ago = Math.round((parse(TODAY) - parse(last)) / 864e5);
+    let status = "unpaid";
+    if (paid > 0 && paid >= expected - 0.005) status = "paid";
+    else if (paid > 0) status = "part";
+    else if (ago > OVERDUE_DAYS) status = "overdue";
+    jobs.push({c, worked, last, rate, estimate: guess !== null, extras, paid, paidOn: p.paidOn || "", note: p.note || "", expected, status,
+      owed: status === "paid" ? 0 : Math.max(0, expected - paid)});
+  }
+  return jobs.sort((a, b) => b.last.localeCompare(a.last) || nameOf(a.c).localeCompare(nameOf(b.c)));
+}
+/* what a job earned between two days: rate × worked days in the range (+ extras if its last day is in the range) */
+function earnedBetween(j, from, to){
+  const days = j.worked.filter(d => d >= from && d <= to).length;
+  return (j.rate || 0) * days + (j.last >= from && j.last <= to ? j.extras : 0);
+}
+const monthName = ym => { const [y, m] = ym.split("-").map(Number); return `${MONTHS[m - 1]} ${y}`; };
+
+function renderMoney(){
+  const jobs = moneyJobs();
+  const ty = taxYear(TODAY);
+  const mFrom = TODAY.slice(0, 7) + "-01", mTo = TODAY.slice(0, 7) + "-31";
+  const tyEarned = jobs.reduce((s, j) => s + earnedBetween(j, ty.from, ty.to), 0);
+  const tyPaid = jobs.filter(j => j.paidOn >= ty.from && j.paidOn <= ty.to).reduce((s, j) => s + j.paid, 0);
+  const moEarned = jobs.reduce((s, j) => s + earnedBetween(j, mFrom, mTo), 0);
+  const moDays = jobs.reduce((s, j) => s + j.worked.filter(d => d >= mFrom && d <= mTo).length, 0);
+  const owing = jobs.filter(j => j.owed > 0);
+  const owed = owing.reduce((s, j) => s + j.owed, 0);
+  const overdue = jobs.filter(j => j.status === "overdue");
+  const noRate = jobs.filter(j => j.rate === null).length;
+
+  let h = `<div class="bar"><h2 class="month-title" style="margin:0">Money</h2><span class="src">${jobs.length} worked job${jobs.length===1?"":"s"}${noRate?` · ${noRate} without a day rate`:""}</span><span style="flex:1"></span>
+    ${jobs.length ? `<button class="btn small" data-moneycsv>Export CSV</button>` : ""}</div>
+  <div class="kpis">
+    <div class="kpi m"><span class="l">Tax year ${ty.label}</span><span class="n">${money(tyEarned)}</span><span class="s">earned since ${fmtDM(ty.from)} · ${money(tyPaid)} paid</span></div>
+    <div class="kpi m"><span class="l">This month</span><span class="n">${money(moEarned)}</span><span class="s">${moDays} day${moDays===1?"":"s"} worked in ${MONTHS[parse(TODAY).getMonth()]}</span></div>
+    <div class="kpi m"><span class="l">Owed to you</span><span class="n">${money(owed)}</span><span class="s">${owing.length} job${owing.length===1?"":"s"} unpaid or part paid</span></div>
+    <div class="kpi m"><span class="l">Overdue</span><span class="n"${overdue.length?' style="color:var(--attn)"':""}>${overdue.length}</span><span class="s">unpaid ${OVERDUE_DAYS}+ days after the last day</span></div>
+  </div>`;
+  if (!jobs.length){
+    main.innerHTML = h + `<div class="empty"><h2>No worked days yet</h2><p>Days you have worked (blue “done” days) appear here so you can track what each agency owes you.</p></div>`;
+    return;
+  }
+  // by agency
+  const ag = new Map();
+  for (const j of jobs){
+    const k = j.c.agency || "No agency";
+    if (!ag.has(k)) ag.set(k, {name:k, days:0, expected:0, paid:0, owed:0});
+    const a = ag.get(k);
+    a.days += j.worked.length; a.expected += j.expected; a.paid += j.paid; a.owed += j.owed;
+  }
+  const agRows = [...ag.values()].sort((a, b) => b.expected - a.expected || a.name.localeCompare(b.name));
+  h += `<section class="panel"><h2>By agency</h2><div class="agt"><span class="h">Agency</span><span class="h num">Days</span><span class="h num">Expected</span><span class="h num">Paid</span><span class="h num">Owed</span>
+    ${agRows.map(a => `<span class="nm" title="${esc(a.name)}">${esc(a.name)}</span><span class="num">${a.days}</span><span class="num">${money(a.expected)}</span><span class="num">${money(a.paid)}</span><span class="num"${a.owed?' style="color:var(--attn)"':""}>${money(a.owed)}</span>`).join("")}</div></section>`;
+  // the jobs, grouped by the month of their last worked day
+  const months = [...new Set(jobs.map(j => j.last.slice(0, 7)))];
+  for (const ym of months){
+    const list = jobs.filter(j => j.last.slice(0, 7) === ym);
+    const exp = list.reduce((s, j) => s + j.expected, 0), pd = list.reduce((s, j) => s + j.paid, 0);
+    h += `<div class="mmonth"><h3 class="wk">${monthName(ym)}</h3><span class="src">${money(exp)} expected · ${money(pd)} paid</span></div>
+    <div class="mtable"><div class="mhead"><span>Production</span><span>Days worked</span><span class="num">Day rate</span><span class="num">Expected</span><span class="num">Paid</span><span class="num">Status</span></div>
+    ${list.map(moneyRowHTML).join("")}</div>`;
+  }
+  h += `<p class="src" style="margin:0">Expected = day rate × days worked + extras (overtime, travel, fittings…). Tap a job to add its rate or what you've been paid. Grey rates are guesses from the call's rate text.</p>`;
+  main.innerHTML = h;
+}
+function moneyRowHTML(j){
+  const [chip, cls] = PAY_CHIP[j.status];
+  const days = j.worked.map(fmtDay);
+  const rate = j.rate === null ? `<span class="est">–</span>` : j.estimate ? `<span class="est" title="Guessed from “${esc(j.c.rate)}” – tap to set">${money(j.rate)} <small>est.</small></span>` : money(j.rate);
+  return `<button type="button" class="mrow" data-pay="${j.c.id}">
+    <span class="prod"><b>${esc(nameOf(j.c))}</b><small>${esc(j.c.agency || "No agency")}${j.note ? " · " + esc(j.note) : ""}</small></span>
+    <span class="mdays">${j.worked.length} day${j.worked.length===1?"":"s"}<small>${esc(days.slice(0, 8).join(", "))}${days.length > 8 ? ` +${days.length - 8} more` : ""}</small></span>
+    <span class="mnums"><span class="num">${rate}<small>day rate</small></span>
+    <span class="num">${money(j.expected)}<small>${j.extras ? "incl. " + money(j.extras) + " extras" : "expected"}</small></span>
+    <span class="num">${money(j.paid)}<small>${j.paidOn ? "on " + esc(fmtDM(j.paidOn)) : "paid"}</small></span></span>
+    <span class="pill ${cls}">${chip}</span>
+  </button>`;
+}
+
+/* small editor for one job's money (opens when you tap a row) */
+let payId = null;
+function openPay(id){
+  const j = moneyJobs().find(x => x.c.id === id); if (!j) return;
+  payId = id;
+  const p = j.c.pay || {};
+  const guess = rateGuess(j.c.rate);
+  const box = (key, label, v, extra) => `<div class="fld"><label for="p-${key}">${label}</label><input class="inp" id="p-${key}" type="number" inputmode="decimal" min="0" step="0.01" value="${v ?? ""}" ${extra || ""}></div>`;
+  layer.innerHTML = `<div class="scrim" data-close></div><aside class="sheet" role="dialog" aria-label="Money for this job">
+    <header><h2>${esc(nameOf(j.c))}</h2><button class="btn small ghost" data-close aria-label="Close">✕</button></header>
+    <div class="content">
+      <p style="margin:0">${esc(j.c.agency || "No agency")} · <b>${j.worked.length} day${j.worked.length===1?"":"s"} worked</b>: ${esc(j.worked.map(fmtDay).join(", "))}</p>
+      ${j.c.rate ? `<p class="src" style="margin:0">Rate on the call: ${esc(j.c.rate)}</p>` : ""}
+      <div class="two">${box("rate", "Day rate (£)", numOrNull(p.rate), guess !== null ? `placeholder="${guess} (from the call)"` : `placeholder="e.g. 110"`)}
+      ${box("extras", "Extras (£) – overtime, travel…", numOrNull(p.extras), `placeholder="0"`)}</div>
+      <div class="two">${box("paid", "Amount paid (£)", numOrNull(p.paid), `placeholder="0"`)}
+      <div class="fld"><label for="p-on">Paid on</label><input class="inp" id="p-on" type="date" value="${esc(p.paidOn || "")}"></div></div>
+      <div class="fld"><label for="p-note">Note</label><input class="inp" id="p-note" value="${esc(p.note || "")}" placeholder="e.g. invoice sent 3 Oct"></div>
+      <div><button class="btn small" data-payfull>Paid in full today</button></div>
+      <p class="src" style="margin:0">Expected now: ${money(j.expected)}. An empty day rate uses the £ amount from the call's rate text.</p>
+    </div>
+    <footer><button class="btn primary" data-paysave ${S.canWrite ? "" : "disabled"}>Save</button><button class="btn ghost" data-close>Cancel</button></footer>
+  </aside>`;
+}
+/* fill "amount paid" with the expected total and "paid on" with today */
+function payFull(){
+  const c = S.calls.get(payId); if (!c) return;
+  const days = (c.dates || []).filter(e => dayStatus(c, e) === "done").length;
+  const rate = numOrNull($("#p-rate", layer).value) ?? rateGuess(c.rate) ?? 0;
+  const extras = numOrNull($("#p-extras", layer).value) || 0;
+  $("#p-paid", layer).value = Math.round((rate * days + extras) * 100) / 100;
+  $("#p-on", layer).value = TODAY;
+}
+async function savePay(){
+  const v = id => $("#" + id, layer).value.trim();
+  const pay = {rate: numOrNull(v("p-rate")), extras: numOrNull(v("p-extras")), paid: numOrNull(v("p-paid")), paidOn: v("p-on") || null, note: v("p-note")};
+  if ([pay.rate, pay.extras, pay.paid].some(n => n !== null && n < 0)){ toast("Amounts can't be below zero"); return; }
+  if (pay.paid && !pay.paidOn) pay.paidOn = TODAY;      // paid but no date: assume today
+  try {
+    await S.db.collection("calls").doc(payId).update({pay, updatedAt: new Date().toISOString()});
+    toast("Saved");
+    closeSheet(); render();
+  } catch (e) { writeFailed(e); }
+}
+/* the money table as a spreadsheet */
+function exportMoneyCSV(){
+  const rows = [["Month","Production","Agency","Days worked","Worked dates","Day rate","Rate is estimate","Extras","Expected","Paid","Paid on","Status","Note"]];
+  for (const j of moneyJobs()){
+    rows.push([monthName(j.last.slice(0, 7)), nameOf(j.c), j.c.agency || "", j.worked.length, j.worked.map(fmtDay).join(", "),
+      j.rate ?? "", j.estimate ? "yes" : "", j.extras || "", j.expected.toFixed(2), j.paid.toFixed(2), j.paidOn, PAY_CHIP[j.status][0], j.note]);
+  }
+  const csv = rows.map(r => r.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  saveFile(`filming-money-${TODAY}.csv`, "﻿" + csv, "text/csv");
+}
+
 /* ================= editor sheet ================= */
 const layer = $("#layer");
 let draft = null, draftId = null, confirmDel = false;
@@ -988,6 +1234,7 @@ let openLoc = new Set();   // date rows where you opened the place box
 function blankCall(){ return {project:"", agency:"", role:"", status:"pending", attention:false, location:"", fitLocation:"", filmLocation:"", rate:"", notes:"", received:TODAY, respondBy:"", dates:[], source:"manual"}; }
 function openEditor(id, preset){
   draftId = id || null; confirmDel = false; openLoc = new Set();
+  fixOpen = false; mergeWith = null; splitOpen = false; payId = null;
   draft = structuredClone(preset || (id ? S.calls.get(id) : blankCall()));
   if (id && draft.newInfo && S.canWrite !== false){ S.db.collection("calls").doc(id).update({newInfo: false}).catch(() => {}); draft.newInfo = false; }
   delete draft.id;
@@ -1005,7 +1252,7 @@ function emailsHTML(d){
   return `<details class="more"><summary>Emails about this job <span class="src">${list.length}</span></summary><div class="mails">${list.map(m =>
     `<details><summary><span class="k">${esc(MAIL_KIND[m.kind]||m.kind||"Email")}</span>${m.date?esc(fmtDay(m.date))+" · ":""}${esc(m.subject||"")}</summary><pre class="raw">${esc(m.text||"")}</pre></details>`).join("")}</div></details>`;
 }
-function closeSheet(){ layer.innerHTML = ""; draft = null; draftId = null; }
+function closeSheet(){ layer.innerHTML = ""; draft = null; draftId = null; payId = null; }
 function drawEditor(){
   const d = draft;
   const ro = !S.canWrite;
@@ -1014,11 +1261,12 @@ function drawEditor(){
     <div class="content">
       ${!draftId && preset_note ? `<div class="review-note">${esc(preset_note)}</div>` : ""}
       ${draftId && d.review ? `<div class="review-note">Added automatically from your email. ${d.reviewReason ? esc(d.reviewReason) + "." : ""} Check the details and save to clear this note.</div>` : ""}
+      ${draftId ? robotHTML(d) : ""}
+      <div class="fld agbox"><label for="f-agency">Agency${draftId ? " – move this job to another agency" : ""}</label><input class="inp" id="f-agency" list="agencies" value="${esc(d.agency)}">${agencyListHTML("agencies")}<span class="src">Each agency's request is its own job. Booked through a different agency? Change it here — the robot will match that agency's emails to this job from now on.</span></div>
       <div class="fld"><span class="lbl">Status</span><div class="status-pick">${STATUSES.map(s => `<button type="button" class="${clsS(s.k)}" data-st="${s.k}" aria-pressed="${d.status===s.k}">${s.short}</button>`).join("")}</div></div>
       <div class="two"><div class="fld"><label for="f-project">Production</label><input class="inp" id="f-project" value="${esc(d.project)}"></div>
-      <div class="fld"><label for="f-agency">Agency</label><input class="inp" id="f-agency" list="agencies" value="${esc(d.agency)}"><datalist id="agencies">${[...new Set(callList().map(c=>c.agency).filter(Boolean))].sort().map(a=>`<option value="${esc(a)}">`).join("")}</datalist></div></div>
-      <div class="two"><div class="fld"><label for="f-role">Role</label><input class="inp" id="f-role" value="${esc(d.role)}"></div>
-      <div class="fld"><label for="f-location">Location</label><input class="inp" id="f-location" value="${esc(d.location)}"></div></div>
+      <div class="fld"><label for="f-role">Role</label><input class="inp" id="f-role" value="${esc(d.role)}"></div></div>
+      <div class="fld"><label for="f-location">Location</label><input class="inp" id="f-location" value="${esc(d.location)}"></div>
       <div class="fld"><span class="lbl">Dates</span>
         <div id="drows" class="drows">${d.dates.map((e,i) => {
           const st = e.state || (e.done ? "worked" : "");
@@ -1049,6 +1297,7 @@ function drawEditor(){
       ${draftId && (d.links||[]).length ? `<div class="fld"><span class="lbl">Agency reply links</span><div style="display:flex;gap:6px;flex-wrap:wrap">${d.links.map(l => `<a class="btn small" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.kind==="yes"?"✓ "+l.text:l.kind==="no"?"✕ "+l.text:"Reply to agency")} ↗</a>`).join("")}</div></div>` : ""}
       ${emailsHTML(d)}
       ${draftId ? `<div class="src">Source: ${esc(d.source||"")}${d.updatedAt?` · updated ${esc(ukTime(d.updatedAt))}`:""}</div>` : ""}
+      ${draftId && !ro ? fixHTML() : ""}
       ${confirmDel ? `<div class="confirm"><span>Delete this call for good?</span><button class="btn small danger" data-delyes>Delete</button><button class="btn small" data-delno>Keep</button></div>` : ""}
     </div>
     <footer><button class="btn primary" data-save ${ro?"disabled":""}>${draftId?"Save changes":"Add to schedule"}</button><button class="btn ghost" data-close>Cancel</button><span style="flex:1"></span>${draftId?`<button class="btn danger small" data-del ${ro?"disabled":""}>Delete</button>`:""}</footer>
@@ -1061,6 +1310,220 @@ function ukTime(iso){
   if (isNaN(t)) return String(iso);
   return t.toLocaleString("en-GB", {timeZone:"Europe/London", day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit"});
 }
+/* a time in UK time like "Thu 1 Oct 14:05" */
+function ukWhen(iso){
+  const t = new Date(iso);
+  if (isNaN(t)) return String(iso || "");
+  const parts = {};
+  new Intl.DateTimeFormat("en-GB", {timeZone:"Europe/London", weekday:"short", day:"numeric", month:"short", hour:"2-digit", minute:"2-digit", hourCycle:"h23"})
+    .formatToParts(t).forEach(p => parts[p.type] = p.value);
+  return `${parts.weekday} ${parts.day} ${parts.month} ${parts.hour}:${parts.minute}`;
+}
+/* just the UK clock time, like "14:05" */
+function ukClock(iso){
+  return new Date(iso).toLocaleTimeString("en-GB", {timeZone:"Europe/London", hour:"2-digit", minute:"2-digit", hourCycle:"h23"});
+}
+
+/* ---------- undo a robot change ---------- */
+/* the robot keeps a short history on each job: what it changed, and the values from before */
+function robotHTML(d){
+  const hist = Array.isArray(d.history) ? d.history : [];
+  if (!hist.length) return "";
+  const last = hist[hist.length - 1];
+  const older = hist.slice(0, -1).reverse().slice(0, 5);   // newest first, up to 5
+  return `<section class="robot">
+    <div class="last"><span>Last robot change: <b>${esc(last.what || "change")}</b> · ${esc(ukWhen(last.at))}</span>
+      ${last.before ? `<button class="btn small" data-undo ${S.canWrite ? "" : "disabled"}>Undo this change</button>` : ""}</div>
+    ${older.length ? `<div class="src">Earlier robot changes</div><ul>${older.map(h => `<li>${esc(h.what || "change")} · ${esc(ukWhen(h.at))}</li>`).join("")}</ul>` : ""}
+  </section>`;
+}
+async function undoRobot(){
+  if (!draftId) return;
+  const raw = (S.raw && S.raw.get(draftId)) || {};
+  const hist = Array.isArray(raw.history) ? raw.history : [];
+  const last = hist[hist.length - 1];
+  if (!last || !last.before) return;
+  // put back only the fields the robot saved from before
+  const change = {history: hist.slice(0, -1), updatedAt: new Date().toISOString()};
+  for (const f of ["status", "dates", "agency", "project"]) if (f in last.before) change[f] = last.before[f];
+  try {
+    await S.db.collection("calls").doc(draftId).update(change);
+    toast("Undone");
+    closeSheet(); render();
+  } catch (e) { writeFailed(e); }
+}
+
+/* ---------- fix this job: merge a duplicate, split off days ---------- */
+let fixOpen = false, mergeWith = null, splitOpen = false;
+/* every agency name we know: from your jobs, plus the usual ones */
+function agencyListHTML(id){
+  const names = [...new Set([...callList().map(c => c.agency), ...Object.values(AGENCY_ALIASES)].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  return `<datalist id="${id}">${names.map(a => `<option value="${esc(a)}">`).join("")}</datalist>`;
+}
+/* a production name with only letters and numbers, e.g. "Tea Time (2)" → "teatime2" */
+const normName = s => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+/* other jobs that look like the same production: one name holds the other (4+ letters)
+   and their dates are within 90 days of each other */
+function similarJobs(){
+  const me = normName(draft.project);
+  const myDays = (draft.dates || []).map(e => e.d).filter(Boolean);
+  const near = (a, b) => Math.abs(parse(a) - parse(b)) <= 90 * 864e5;
+  return callList().filter(c => {
+    if (c.id === draftId) return false;
+    const other = normName(c.project);
+    const short = me.length <= other.length ? me : other, long = short === me ? other : me;
+    if (short.length < 4 || !long.includes(short)) return false;
+    const theirDays = (c.dates || []).map(e => e.d);
+    if (!myDays.length || !theirDays.length) return true;          // no dates to compare: still offer it
+    return myDays.some(a => theirDays.some(b => near(a, b)));
+  }).sort((a, b) => (firstDate(a) || "").localeCompare(firstDate(b) || ""));
+}
+function fixHTML(){
+  const d = draft;
+  const cands = similarJobs();
+  const other = mergeWith && S.calls.get(mergeWith);
+  const label = c => `${nameOf(c)} · ${c.agency || "No agency"} · ${SMAP[c.status]?.short || c.status}${firstDate(c) ? " · " + fmtShort(firstDate(c)) : ""}`;
+  const merge = other
+    ? `<div class="confirm"><span>Merge “${esc(label(other))}” into this job? Its days, links, emails, answers and notes move here, then that job is deleted.</span><button class="btn small primary" data-mergeyes>Merge</button><button class="btn small" data-mergeno>Back</button></div>`
+    : cands.length
+      ? `<div class="fixrow"><select class="inp" id="mg-sel" aria-label="Job to merge into this one">${cands.map(c => `<option value="${c.id}">${esc(label(c))}</option>`).join("")}</select><button class="btn small" data-mergeask>Merge…</button></div>`
+      : `<p class="src" style="margin:0">No similar jobs (same production name, dates within 90 days).</p>`;
+  const split = !splitOpen
+    ? `<div><button class="btn small" data-splitopen ${d.dates.length < 2 ? "disabled" : ""}>Split off days…</button></div>`
+    : `<div class="pick">
+        <span class="src">Tick the days that belong to a different agency's request.</span>
+        <div class="splitdays">${d.dates.map((e, i) => `<label><input type="checkbox" id="sp-${i}"> ${esc(e.d ? fmtShort(e.d) : "no date")} <small class="muted">${kindName(e.kind)}</small></label>`).join("")}</div>
+        <div class="fixrow"><input class="inp" id="sp-agency" list="agencies" placeholder="Agency for those days"><button class="btn small primary" data-splityes>Create new job</button><button class="btn small ghost" data-splitno>Cancel</button></div>
+      </div>`;
+  return `<details class="more" id="fixbox"${fixOpen ? " open" : ""}><summary>Fix this job <span class="src">merge a duplicate, split off days</span></summary>
+    <div class="more-in">
+      <div class="fld"><span class="lbl">Merge with…</span>${merge}</div>
+      <div class="fld"><span class="lbl">Split off days</span>${split}</div>
+    </div></details>`;
+}
+/* which status is further along: done beats confirmed beats released … beats expired */
+const MERGE_RANK = ["done", "confirmed", "released", "canceled", "declined", "available", "pending", "expired"];
+const mergeRank = st => { const i = MERGE_RANK.indexOf(st); return i < 0 ? 99 : i; };
+/* the day colour a job's status gives, so days keep their colour after a merge */
+const DAY_FOR = {done:"worked", available:"available", pending:"pending", released:"released", canceled:"canceled", declined:"canceled", expired:"canceled"};
+const isEmpty = v => v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length);
+
+/* the robot looks jobs up by agency: keep "agencyKey" in step with the agency name
+   (same rule as the robot: "Two 10 Casting" = "two10", "Lucas Extras" = "lucas") */
+function agencyKeyOf(a){ return String(a || "").toLowerCase().replace(/\b(ltd|limited|casting|extras?|agency|uk|talent|management|the)\b/g, "").replace(/[^a-z0-9]/g, ""); }
+async function mergeJobs(){
+  const otherId = mergeWith;
+  const other = S.raw && S.raw.get(otherId);
+  if (!draftId || !other) return;
+  pullForm();                                         // keep anything typed in the editor
+  const me = draft;
+  const status = mergeRank(other.status) < mergeRank(me.status) ? other.status : me.status;
+  // a day keeps its own state; a day with none, from a job whose status is different, gets that job's colour
+  const dayColour = (e, jobStatus) => (!e.state && jobStatus !== status && DAY_FOR[jobStatus]) ? {...e, state: DAY_FOR[jobStatus]} : {...e};
+  // dates: all of this job's days, plus the other job's days on dates this job doesn't have
+  const dates = (me.dates || []).map(e => dayColour(e, me.status));
+  const myDays = new Set(dates.map(e => e.d));
+  (other.dates || []).forEach(e => { if (e && e.d && !myDays.has(e.d)) dates.push(dayColour(e, other.status)); });
+  dates.sort((a, b) => String(a.d).localeCompare(String(b.d)));
+  // links by url, emails by key, answers by text
+  const links = [...(me.links || [])];
+  (other.links || []).forEach(l => { if (!links.some(x => x.url === l.url)) links.push(l); });
+  const emails = [...(me.emails || [])];
+  (other.emails || []).forEach(m => { if (!m.key || !emails.some(x => x.key === m.key)) emails.push(m); });
+  const answers = [...new Set([...(me.answers || []), ...(other.answers || [])])];
+  const notes = [...new Set([me.notes, other.notes].map(n => (n || "").trim()).filter(Boolean))].join(" • ");
+  const out = {...me, status, dates, links, emails, answers, notes, updatedAt: new Date().toISOString()};
+  // fill this job's empty fields from the other job
+  const skip = new Set(["history", "createdAt", "updatedAt", "newInfo", "newInfoText", "review", "reviewReason", "tidied"]);
+  for (const [k, v] of Object.entries(other)) if (!skip.has(k) && isEmpty(out[k]) && !isEmpty(v)) out[k] = v;
+  delete out.tidied;                                  // display-only, never saved
+  // both changes in one go: either both happen or neither does
+  const batch = S.db.batch();
+  out.agencyKey = agencyKeyOf(out.agency);
+  batch.set(S.db.collection("calls").doc(draftId), out);
+  batch.delete(S.db.collection("calls").doc(otherId));
+  try {
+    await batch.commit();
+    toast(`Merged “${nameOf(other)}” into this job`);
+    closeSheet(); render();
+  } catch (e) { writeFailed(e); }
+}
+
+/* split: the ticked days become a new job for another agency, and leave this one */
+async function splitJob(){
+  const ticked = new Set(draft.dates.map((e, i) => i).filter(i => $("#sp-" + i, layer)?.checked));
+  const agency = normAgency($("#sp-agency", layer).value);
+  pullForm();
+  if (!ticked.size){ toast("Tick the days to split off"); return; }
+  if (ticked.size === draft.dates.length){ toast("Leave at least one day on this job"); return; }
+  if (!agency){ toast("Type the agency for those days"); $("#sp-agency", layer)?.focus(); return; }
+  const now = new Date().toISOString();
+  const moved = draft.dates.filter((e, i) => ticked.has(i));
+  const kept = draft.dates.filter((e, i) => !ticked.has(i));
+  const newId = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const newJob = {...blankCall(), project: draft.project, role: draft.role || "", status: draft.status, agency, dates: moved,
+    location: draft.location || "", fitLocation: draft.fitLocation || "", filmLocation: draft.filmLocation || "", rate: draft.rate || "",
+    received: draft.received || TODAY, source: "split", notes: `Split off from the ${draft.agency || "other"} job`, createdAt: now, updatedAt: now};
+  const body = {...draft, dates: kept, updatedAt: now};
+  delete body.tidied;                                 // display-only, never saved
+  const batch = S.db.batch();
+  body.agencyKey = agencyKeyOf(body.agency); newJob.agencyKey = agencyKeyOf(newJob.agency);
+  batch.set(S.db.collection("calls").doc(draftId), body);
+  batch.set(S.db.collection("calls").doc(newId), newJob);
+  try {
+    await batch.commit();
+    toast(`${moved.length} day${moved.length === 1 ? "" : "s"} moved to a new ${agency} job`);
+    closeSheet(); render();
+  } catch (e) { writeFailed(e); }
+}
+
+/* ---------- robot health: the robot writes meta/health each time it runs ---------- */
+/* fields: lastRun (ISO time), lastNewCall (ISO), unmatched (number), errors (number), message (text) */
+S.health = null;
+/* "just now", "3 min ago", "2 h ago", "4 days ago" */
+function agoText(iso){
+  const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (isNaN(min)) return "";
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  if (min < 48 * 60) return `${Math.floor(min / 60)} h ago`;
+  return `${Math.floor(min / 1440)} days ago`;
+}
+/* the health doc in one shape (older robots wrote at / counts / lines) */
+function healthFacts(){
+  const h = S.health; if (!h) return null;
+  const c = h.counts || {};
+  return {lastRun: h.lastRun || h.at || "", lastNewCall: h.lastNewCall || "",
+    unmatched: h.unmatched ?? c.unmatched ?? 0, errors: h.errors ?? c.errors ?? 0,
+    message: h.message || (Array.isArray(h.lines) ? h.lines.join("\n") : "")};
+}
+function showHealth(){
+  const el = $("#health"), f = healthFacts();
+  if (!f || !f.lastRun || isNaN(new Date(f.lastRun))){ el.hidden = true; return; }   // no doc: show nothing
+  const min = (Date.now() - new Date(f.lastRun).getTime()) / 60000;
+  const colour = min < 15 ? "green" : min < 60 ? "amber" : "red";
+  el.hidden = false;
+  el.className = "health " + colour;
+  el.lastElementChild.textContent = `Robot checked ${agoText(f.lastRun)}`;
+  el.title = [`Last run: ${ukWhen(f.lastRun)}`, f.lastNewCall ? `Last new call: ${ukWhen(f.lastNewCall)}` : "", `Unmatched emails: ${f.unmatched}`, `Errors: ${f.errors}`, f.message].filter(Boolean).join("\n");
+}
+function openHealth(){
+  const f = healthFacts(); if (!f) return;
+  layer.innerHTML = `<div class="scrim" data-close></div><aside class="sheet" role="dialog" aria-label="Robot check">
+    <header><h2>Robot check</h2><button class="btn small ghost" data-close aria-label="Close">✕</button></header>
+    <div class="content">
+      <dl class="hfacts">
+        <dt>Last run</dt><dd>${esc(ukWhen(f.lastRun))} · ${esc(agoText(f.lastRun))}</dd>
+        <dt>Last new call</dt><dd>${f.lastNewCall ? esc(ukWhen(f.lastNewCall)) + " · " + esc(agoText(f.lastNewCall)) : "–"}</dd>
+        <dt>Unmatched emails</dt><dd>${esc(f.unmatched)}</dd>
+        <dt>Errors</dt><dd${f.errors ? ' style="color:var(--attn);font-weight:600"' : ""}>${esc(f.errors)}</dd>
+      </dl>
+      ${f.message ? `<pre class="raw">${esc(f.message)}</pre>` : `<p class="src" style="margin:0">No message from the robot.</p>`}
+      <p class="src" style="margin:0">Green: checked in the last 15 minutes. Amber: in the last hour. Red: longer ago – the robot may have stopped.</p>
+    </div>
+  </aside>`;
+}
+setInterval(showHealth, 60 * 1000);                 // recount "3 min ago" every minute
 function pullForm(){
   if (!draft) return;
   const v = id => { const el = $("#"+id, layer); return el ? el.value.trim() : ""; };
@@ -1091,6 +1554,7 @@ async function saveDraft(){
   if (!draft.project){ toast("Add the production name first"); $("#f-project", layer)?.focus(); return; }
   draft.dates = draft.dates.filter(e => /^\d{4}-\d\d-\d\d$/.test(e.d)).sort((a,b)=>a.d.localeCompare(b.d));
   const body = {...draft, review: false, reviewReason: "", updatedAt: new Date().toISOString()};
+  body.agencyKey = agencyKeyOf(body.agency);
   delete body.tidied;                               // display-only, never saved
   if (!draftId) body.createdAt = body.updatedAt;
   const id = draftId || ("c" + Date.now().toString(36) + Math.random().toString(36).slice(2,6));
@@ -1117,7 +1581,7 @@ function openImporter(){
     <div class="content">
       <p style="margin:0">Paste the availability email (or the text from its Respond page). The app picks out the production, agency, role, fitting and shoot dates and locations. Check them before saving.</p>
       <div class="fld"><label for="imp-subject">Email subject (helps find the production and dates)</label><input class="inp" id="imp-subject" placeholder="Availability enquiry for Wed 14 Oct 2026"></div>
-      <div class="fld"><label for="imp-from">Sent by (agency or sender name)</label><input class="inp" id="imp-from" list="agencies-all" placeholder="Lucas Extras"><datalist id="agencies-all">${[...new Set(callList().map(c=>c.agency).filter(Boolean))].sort().map(a=>`<option value="${esc(a)}">`).join("")}</datalist></div>
+      <div class="fld"><label for="imp-from">Sent by (agency or sender name)</label><input class="inp" id="imp-from" list="agencies-all" placeholder="Lucas Extras">${agencyListHTML("agencies-all")}</div>
       <div class="fld"><label for="imp-text">Email text</label><textarea class="inp" id="imp-text" style="min-height:200px" placeholder="I would like to put you forward for the following job…"></textarea></div>
       <div class="fld"><label for="imp-received">Date received</label><input class="inp" type="date" id="imp-received" value="${TODAY}"></div>
       <div class="status-line" id="imp-status"></div>
@@ -1224,6 +1688,20 @@ document.addEventListener("click", e => {
   if ("del" in ds){ pullForm(); confirmDel = true; drawEditor(); return; }
   if ("delno" in ds){ pullForm(); confirmDel = false; drawEditor(); return; }
   if ("delyes" in ds){ S.db.collection("calls").doc(draftId).delete().then(() => { toast("Deleted"); closeSheet(); }, writeFailed); return; }
+  if ("undo" in ds){ undoRobot(); return; }
+  // fix this job: merge (pick → confirm) and split off days
+  if ("mergeask" in ds && draft){ const pick = $("#mg-sel", layer)?.value; pullForm(); mergeWith = pick || null; fixOpen = true; drawEditor(); return; }
+  if ("mergeno" in ds && draft){ pullForm(); mergeWith = null; fixOpen = true; drawEditor(); return; }
+  if ("mergeyes" in ds){ mergeJobs(); return; }
+  if ("splitopen" in ds && draft){ pullForm(); splitOpen = true; fixOpen = true; drawEditor(); return; }
+  if ("splitno" in ds && draft){ pullForm(); splitOpen = false; fixOpen = true; drawEditor(); return; }
+  if ("splityes" in ds){ splitJob(); return; }
+  // money tab
+  if (ds.pay){ openPay(ds.pay); return; }
+  if ("payfull" in ds){ payFull(); return; }
+  if ("paysave" in ds){ savePay(); return; }
+  if ("moneycsv" in ds){ exportMoneyCSV(); return; }
+  if ("health" in ds){ openHealth(); return; }
   if ("extract" in ds){ extract(); return; }
   if ("csv" in ds){ exportCSV(); return; }
   if ("backup" in ds){ exportBackup(); return; }
@@ -1242,6 +1720,8 @@ document.addEventListener("change", e => {
   if (e.target.id === "agencySel"){ S.agency = e.target.value; renderCalls(); }
   if (e.target.id === "sortSel"){ S.sort = e.target.value; save("sort", S.sort); renderCalls(); }
 });
+// remember whether "Fix this job" is open, so it stays open when the editor redraws
+document.addEventListener("toggle", e => { if (e.target.id === "fixbox") fixOpen = e.target.open; }, true);
 document.addEventListener("click", e => {
   const a = e.target.closest("a[data-quick]");
   if (a) setStatus(a.dataset.id, a.dataset.quick);
@@ -1249,7 +1729,7 @@ document.addEventListener("click", e => {
 $("#addBtn").addEventListener("click", openImporter);
 // coming back to the app (e.g. next morning): redraw so "today" is right
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && S.loaded && S.calls.size && !(layer.innerHTML && draft)) render();
+  if (!document.hidden && S.loaded && S.calls.size && !(layer.innerHTML && (draft || payId))) render();
 });
 $("#exportBtn").addEventListener("click", openMenu);
 
@@ -1337,16 +1817,24 @@ function showLogin(msg){
   const db = firebase.firestore();
   db.enablePersistence({synchronizeTabs: true}).catch(() => {});   // works offline too
   S.db = db;
-  let unsub = null;
+  let unsub = null, healthUnsub = null;
   firebase.auth().onAuthStateChanged(user => {
     if (unsub){ unsub(); unsub = null; }
-    if (!user){ S.loaded = false; S.calls = new Map(); S.raw = new Map(); showLogin(); return; }
+    if (!user){ if (healthUnsub){ healthUnsub(); healthUnsub = null; } S.health = null; showHealth(); S.loaded = false; S.calls = new Map(); S.raw = new Map(); showLogin(); return; }
     S.userEmail = user.email;
     $("#addBtn").hidden = false; $("#exportBtn").hidden = false;
     main.innerHTML = `<div class="empty"><h2>Loading your calls</h2></div>`;
     // EP sign-in code: when the EP robot asks, a yellow box appears at the top
     db.collection("ep").doc("code").onSnapshot(d => showEpCode(d.exists ? d.data() : null), () => {});
+    // robot health: a slim line next to the sync badge (errors are ignored)
+    if (healthUnsub) healthUnsub();
+    healthUnsub = db.collection("meta").doc("health").onSnapshot(d => { S.health = d.exists ? d.data() : null; showHealth(); }, () => { S.health = null; showHealth(); });
+    let firstSnap = true, lastFromCache = null;
     unsub = db.collection("calls").onSnapshot({includeMetadataChanges: true}, snap => {
+      // skip events where only Firebase's own flags changed (nothing in your calls, still online/offline as before)
+      const fromCache = snap.metadata.fromCache;
+      if (!firstSnap && fromCache === lastFromCache && !snap.docChanges().length) return;
+      firstSnap = false; lastFromCache = fromCache;
       S.raw = new Map(snap.docs.map(d => [d.id, d.data()]));   // exactly what's in the database
       TODAY = key(new Date());
       retidy();                                                // what you see (old jobs tidied)
@@ -1356,7 +1844,7 @@ function showLogin(msg){
         main.innerHTML = `<div class="empty"><h2>No calls yet</h2><p>Import your backup file from “Backup”, or add your first availability check with “+ Add availability check”.</p></div>`;
         return;
       }
-      if (layer.innerHTML && draft) return;           // don't redraw under the editor
+      if (layer.innerHTML && (draft || payId)) return;   // don't redraw under the editor
       const hadFocus = document.activeElement?.id === "q";
       render();
       if (hadFocus) $("#q")?.focus();
@@ -1370,6 +1858,9 @@ function showLogin(msg){
     });
   });
 })();
+
+/* phone app: keep the app files on the device so it opens fast (errors are ignored) */
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 })();
 </script>
 </body>

@@ -119,15 +119,57 @@ async function saveSeenCache() {
   const keep = [...seenCache.entries()].sort((a, b) => b[1] - a[1]).slice(0, 1500);
   await db.collection("meta").doc("seen").set({ keys: Object.fromEntries(keep), at: new Date().toISOString() });
 }
+// Your jobs, loaded only when needed. To stay inside Firebase's free reads, an email from an agency
+// loads only THAT agency's jobs (field "agencyKey"), not the whole schedule. Everything else
+// (re-reads, clean-ups, unknown senders) loads the lot.
 let existingCalls = null;
-let existingCallsPartial = false;       // true when only some calls were loaded (EP page refresh)
+let fullLoaded = false, scopeAgency = null, keysReady = null;
+const known = new Map();                 // id → job, shared by every lookup in this run
+const scopedLoaded = new Set();
+function rememberJobs(list) { list.forEach(c => { if (!known.has(c.id)) known.set(c.id, c); }); existingCalls = [...known.values()]; }
+function addKnown(c) { known.set(c.id, c); existingCalls = [...known.values()]; }
+function resetCalls() { existingCalls = null; fullLoaded = false; known.clear(); scopedLoaded.clear(); }
 async function loadExistingCalls() {
-  if (!existingCalls || existingCallsPartial) {
-    existingCallsPartial = false;
-    const snap = await db.collection("calls").get();
-    existingCalls = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  if (fullLoaded) return existingCalls;
+  const k = scopeAgency ? canonAgency(scopeAgency) : "";
+  if (k && !REBUILD && process.env.CLEANUP !== "true") {
+    if (keysReady === null) keysReady = !!(((await db.collection("meta").doc("flags").get()).data() || {}).agencyKeys);
+    if (keysReady) {
+      if (!scopedLoaded.has(k)) {
+        const snap = await db.collection("calls").where("agencyKey", "==", k).get();
+        scopedLoaded.add(k);
+        rememberJobs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      }
+      return existingCalls || (existingCalls = []);
+    }
   }
+  const snap = await db.collection("calls").get();
+  known.clear();
+  rememberJobs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  fullLoaded = true;
   return existingCalls;
+}
+// every job carries "agencyKey" so the robot can look up one agency's jobs cheaply
+async function backfillAgencyKeys() {
+  await loadExistingCalls();
+  let n = 0;
+  for (const c of existingCalls) {
+    const k = canonAgency(c.agency);
+    if (c.agencyKey !== k) { await db.collection("calls").doc(c.id).update({ agencyKey: k }); c.agencyKey = k; n++; }
+  }
+  await db.collection("meta").doc("flags").set({ agencyKeys: true, at: new Date().toISOString() }, { merge: true });
+  return n;
+}
+
+// Each robot change is noted on the job (newest last, up to 8) with the values from before,
+// so the app's "Undo this change" button can put them back.
+function withHistory(c, what, changes) {
+  const before = {};
+  for (const f of ["status", "dates", "agency", "project"])
+    if (f in changes && JSON.stringify(changes[f]) !== JSON.stringify(c[f])) before[f] = c[f] === undefined ? null : c[f];
+  if (!Object.keys(before).length) return changes;
+  const history = (Array.isArray(c.history) ? c.history : []).concat([{ at: new Date().toISOString(), what: String(what).slice(0, 120), before }]).slice(-8);
+  return { ...changes, history };
 }
 
 // Agency names you already have in your schedule (from the spreadsheet or added by you).
@@ -266,7 +308,7 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
       await enrichFromPortal(call);
       call.status = "confirmed";
       await db.collection("calls").doc(id).set(call);
-      existingCalls.push({ id, ...call });
+      addKnown({ id, ...call });
       stats.booked[2]++;
       await notifyPhone({ ...call, project: "BOOKED: " + call.project });
       return id;
@@ -274,6 +316,8 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
     return null;
   }
   const c = matches[0];
+  const was = { status: c.status, dates: c.dates, agency: c.agency, project: c.project, history: c.history };
+  const label = (kind === "booked" ? "Booking" : "Release") + " email " + received;
   if (olderThanStatus(c, received)) { miss(`${kind}: older than the job's latest news`); return c.id; }
   if (kind === "released" && c.status === "released") return c.id;
   // "Not required for filming on 3rd Oct": only those days are released when the job has other days
@@ -286,8 +330,9 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
     if (hit || allOff) {
       const ch = { dates, updatedAt: new Date().toISOString(), statusAt: received };
       if (allOff && c.status !== "released") ch.status = "released";
-      await db.collection("calls").doc(c.id).update(ch);
-      Object.assign(c, ch);
+      const ch2 = withHistory(was, label + " (some days)", ch);
+      await db.collection("calls").doc(c.id).update(ch2);
+      Object.assign(c, ch2);
     }
     return c.id;
   }
@@ -317,10 +362,10 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
     });
     dates.sort((a, b) => a.d.localeCompare(b.d));
     changes.dates = dates;
-    c.dates = dates;
   }
-  await db.collection("calls").doc(c.id).update(changes);
-  c.status = status;
+  const changes2 = withHistory(was, label, changes);
+  await db.collection("calls").doc(c.id).update(changes2);
+  Object.assign(c, changes2);
   await notifyPhone({ ...c, project: (kind === "booked" ? "BOOKED: " : "Released: ") + c.project });
   return c.id;
 }
@@ -392,8 +437,9 @@ async function amendCall(c, call) {
   const what = [added.length ? `${added.length} new date${added.length > 1 ? "s" : ""}` : "",
                 Object.keys(changes).some(k => ["role", "location", "rate", "respondBy"].includes(k)) ? "new details" : ""].filter(Boolean).join(" + ");
   if (what) { changes.newInfo = true; changes.newInfoText = what + " from a later email"; }
-  await db.collection("calls").doc(c.id).update(changes);
-  Object.assign(c, changes);
+  const changes2 = withHistory(c, "Later email: " + (what || "details"), changes);
+  await db.collection("calls").doc(c.id).update(changes2);
+  Object.assign(c, changes2);
   stats.amended++;
   if (added.length) await notifyPhone({ ...c, project: "Update: " + nameOfCall(c), dates: dates.filter(e => added.includes(e.d)) });
   return c.id;
@@ -419,7 +465,7 @@ async function logEmail(callId, m, kind) {
 // Clean up: copies of the same job (same production + agency, around the same time) become one.
 // Your own entries are never deleted; robot copies are folded into the best one.
 async function mergeDuplicates() {
-  existingCalls = null;
+  resetCalls();
   await loadExistingCalls();
   // the copy with the "furthest along" status wins (a release beats a reminder that came earlier)
   const rank = { done: 8, confirmed: 7, released: 6, canceled: 6, declined: 5, available: 4, pending: 3, expired: 2, lapsed: 2 };
@@ -481,7 +527,7 @@ async function mergeDuplicates() {
     for (const d of dups) await db.collection("calls").doc(d.id).delete();
     merged += dups.length;
   }
-  existingCalls = null;
+  resetCalls();
   await loadExistingCalls();
   return merged;
 }
@@ -489,7 +535,7 @@ async function mergeDuplicates() {
 // a new call from an email
 function buildCall(r, src) {
   return {
-    project: r.project, agency: r.agency, role: r.role,
+    project: r.project, agency: r.agency, agencyKey: canonAgency(r.agency), role: r.role,
     location: r.location, fitLocation: r.fitLocation, filmLocation: r.filmLocation,
     rate: r.rate, notes: r.notes, dates: r.dates.map(({ hold, ...d }) => d),
     respondBy: r.respondBy, received: src.received,
@@ -520,15 +566,18 @@ async function applyCallTime(r, ct, subject) {
   }
   if (match.length !== 1) { miss("calltime: " + (found.why || "no match") + (day ? "" : ", no date")); return null; }
   const c = match[0];
+  const was = { status: c.status, dates: c.dates, history: c.history };
   const dates = (c.dates || []).map(e => ({ ...e }));
   const d = day || (dates.filter(e => e.d >= new Date().toISOString().slice(0, 10)).sort((a, b) => a.d.localeCompare(b.d))[0] || {}).d;
   if (!d) return null;
   let entry = dates.find(e => e.d === d && e.kind === "film") || dates.find(e => e.d === d);
   if (!entry) { entry = { d: d, kind: "film" }; dates.push(entry); dates.sort((a, b) => a.d.localeCompare(b.d)); }
   entry.callTime = ct.time;
-  if (c.status === "available") { c.status = "confirmed"; }   // a call time means you're booked
+  const newStatus = c.status === "available" ? "confirmed" : c.status;   // a call time means you're booked
   if (ct.place) entry.callPlace = ct.place.slice(0, 120);
-  await db.collection("calls").doc(c.id).update({ dates: dates, status: c.status, updatedAt: new Date().toISOString() });
+  const chC = withHistory(was, "Call time email", { dates: dates, status: newStatus, updatedAt: new Date().toISOString() });
+  await db.collection("calls").doc(c.id).update(chC);
+  Object.assign(c, chC);
   c.dates = dates;
   const t = new Date(d + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
   await notifyPhone({ ...c, project: "Call time: " + c.project, role: t + " — call " + ct.time + (ct.place ? " @ " + ct.place : ""), dates: [] , location: ct.place || c.location });
@@ -653,16 +702,13 @@ async function refreshPendingPortalPages() {
   // the calls that can still change (not the whole schedule)
   const slot = Math.floor(Date.now() / (5 * 60 * 1000)) % 6;
   if (slot !== 0 && !process.env.PORTAL_DEBUG && !REBUILD) return;
-  if (!existingCalls) {
-    const snap = await db.collection("calls").where("status", "in", ["pending", "available", "declined"]).get();
-    existingCalls = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    existingCallsPartial = true;
-  }
+  const snapR = await db.collection("calls").where("status", "in", ["pending", "available", "declined"]).get();
+  const openJobs = snapR.docs.map(d => ({ id: d.id, ...d.data() }));
   const dbg = !!process.env.PORTAL_DEBUG;
   const today = londonDate();
   // new requests: every 20 minutes; ones you've answered (with days still ahead): every 6 hours
   const every = { pending: 20, available: 360, declined: 360 };
-  const due = existingCalls.filter(c => c.id && every[c.status] && portalLink(c) && (c.dates || []).some(e => e.d >= today) &&
+  const due = openJobs.filter(c => c.id && every[c.status] && portalLink(c) && (c.dates || []).some(e => e.d >= today) &&
     (dbg || !c.portalCheckedAt || Date.now() - new Date(c.portalCheckedAt).getTime() > every[c.status] * 60 * 1000))
     .sort((a, b) => (a.portalCheckedAt || "").localeCompare(b.portalCheckedAt || "")).slice(0, dbg ? 30 : 8);
   for (const c of due) {
@@ -677,7 +723,7 @@ async function refreshPendingPortalPages() {
         if (copy[k] !== undefined && JSON.stringify(copy[k]) !== JSON.stringify(c[k])) ch[k] = copy[k];
       ch.updatedAt = new Date().toISOString();
     }
-    await db.collection("calls").doc(c.id).update(ch);
+    await db.collection("calls").doc(c.id).update(changed ? withHistory(c, "EP page", ch) : ch);
     Object.assign(c, copy);
   }
 }
@@ -713,8 +759,9 @@ async function applyReply(r, links, answer, received) {
   const changes = { status: copy.status, dates: copy.dates || [], statusAt: received || londonDate(), repliedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
   changes.declinedBy = copy.status === "declined" ? "robot" : "";
   if (copy.answers) changes.answers = copy.answers;
-  await db.collection("calls").doc(c.id).update(changes);
-  Object.assign(c, changes);
+  const changes2 = withHistory(c, "Answer email " + (received || ""), changes);
+  await db.collection("calls").doc(c.id).update(changes2);
+  Object.assign(c, changes2);
   return c.id;
 }
 
@@ -898,12 +945,82 @@ async function checkFolder(client, account, counts, folder, collect) {
       text: mail.html ? htmlToText(mail.html) : (mail.text || ""),
       from: (mail.from && mail.from.value && mail.from.value[0]) || {},
       date: mail.date ? new Date(mail.date).getTime() : 0,
+      pdfs: (mail.attachments || []).filter(a => /pdf/i.test(a.contentType || "") && (a.size || 0) < 4e6).slice(0, 3).map(a => ({ name: a.filename || "", content: a.content })),
       received: londonDate(mail.date), account,
     };
     if (collect) { if (!collect.some(x => x.key === key)) collect.push(item); }
     else await safeHandle(item, account, counts, false);
   }
 }
+
+
+// ---------- the robot's own report (shown in the app's header) + a daily summary ----------
+async function pushNote(title, message) {
+  if (!process.env.NTFY_TOPIC || REBUILD) return;
+  try {
+    await fetch("https://ntfy.sh/", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic: process.env.NTFY_TOPIC, title, message, tags: ["clipboard"], click: "https://cassiomariano.github.io/filming-schedule/" }) });
+  } catch (e) { /* the summary is only a nice-to-have */ }
+}
+function londonHour() { return Number(new Date().toLocaleString("en-GB", { timeZone: "Europe/London", hour: "2-digit", hour12: false })); }
+async function writeHealth(accountCounts, failed) {
+  const ref = db.collection("meta").doc("health");
+  const prev = (await ref.get()).data() || {};
+  const today = londonDate();
+  const sum = k => accountCounts.reduce((n, [, c]) => n + (c[k] || 0), 0);
+  const added = sum("added"), updated = sum("updated"), errors = sum("errors") + (failed ? 1 : 0);
+  const unmatched = Object.values(why).reduce((a, b) => a + b, 0);
+  const rolled = prev.day && prev.day.date !== today;
+  const base = prev.day && !rolled ? prev.day : { date: today, newCalls: 0, updates: 0, unmatched: 0, errors: 0 };
+  const day = { date: today, newCalls: base.newCalls + added, updates: base.updates + updated, unmatched: base.unmatched + unmatched, errors: base.errors + errors };
+  const out = {
+    lastRun: new Date().toISOString(),
+    lastNewCall: added ? new Date().toISOString() : (prev.lastNewCall || null),
+    unmatched: day.unmatched, errors: day.errors,
+    message: failed ? "An inbox couldn't be checked on the last run" : `Today: ${day.newCalls} new calls, ${day.updates} updates`,
+    day, yesterday: rolled ? prev.day : (prev.yesterday || null),
+    summaryDate: prev.summaryDate || "", backupDate: prev.backupDate || "",
+  };
+  // once a day after 08:00: yesterday in one phone message
+  if (londonHour() >= 8 && out.summaryDate !== today && out.yesterday) {
+    const y = out.yesterday;
+    await pushNote("Filming Schedule – yesterday",
+      `${y.newCalls} new availability check${y.newCalls === 1 ? "" : "s"}, ${y.updates} update${y.updates === 1 ? "" : "s"}` +
+      (y.unmatched ? `, ${y.unmatched} email${y.unmatched === 1 ? "" : "s"} I couldn't match to a job` : "") +
+      (y.errors ? `, ${y.errors} problem${y.errors === 1 ? "" : "s"} – open the app` : ". All good."));
+    out.summaryDate = today;
+  }
+  await ref.set(out);
+  return out;
+}
+
+// ---------- weekly backup (Sundays), sealed so only the robot can open it ----------
+async function weeklyBackup(health) {
+  const sunday = new Date().toLocaleDateString("en-GB", { timeZone: "Europe/London", weekday: "short" }) === "Sun";
+  const last = health && health.backupDate ? new Date(health.backupDate + "T12:00:00Z").getTime() : 0;
+  if (!(process.env.BACKUP === "true" || (sunday && Date.now() - last > 6 * 864e5))) return;
+  const snap = await db.collection("calls").get();
+  const calls = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const robotKey = crypto.createPublicKey(serviceAccount.private_key).export({ type: "spki", format: "pem" });
+  const { seal } = require("./vault.js");
+  require("fs").writeFileSync("backup.sealed.json", JSON.stringify(seal(robotKey, { at: new Date().toISOString(), calls })));
+  await db.collection("meta").doc("health").set({ backupDate: londonDate() }, { merge: true });
+  report("notice", "Backup", `Sealed backup of ${calls.length} jobs.`);
+}
+
+// ---------- call sheets: read the text of PDF attachments ----------
+async function pdfText(pdfs) {
+  let out = "";
+  try {
+    const parse = require("pdf-parse/lib/pdf-parse.js");
+    for (const p of pdfs) {
+      const r = await Promise.race([parse(p.content), new Promise((_, no) => setTimeout(() => no(new Error("slow")), 20000))]);
+      out += "\n" + String(r.text || "").slice(0, 20000);
+    }
+  } catch (e) { stats.pdfFailed = (stats.pdfFailed || 0) + 1; }
+  return out;
+}
+const SHEET_NAME = /call ?sheet|callsheet|schedule|movement|unit ?base|info/i;
 
 // one email that goes wrong must not stop the others (it's counted and skipped next time)
 async function safeHandle(item, account, counts, rereading) {
@@ -915,8 +1032,16 @@ async function safeHandle(item, account, counts, rereading) {
 }
 // work out what one email means and update the schedule
 async function handleMail(m, account, counts, rereading) {
-  const { key, seenRef, subject, text, html, from, received } = m;
-  const kind = classifyEmail(subject, text, isFromCastingAgency(from.name, from.address, knownAgencies));
+  const { key, seenRef, subject, html, from, received } = m;
+  let text = m.text;
+  let kind = classifyEmail(subject, text, isFromCastingAgency(from.name, from.address, knownAgencies));
+  // call sheets usually come as a PDF: read it for call-time and booking emails, or when it's named like one
+  const pdfs = m.pdfs || [];
+  if (pdfs.length && (kind === "calltime" || kind === "booked" || pdfs.some(p => SHEET_NAME.test(p.name)))) {
+    const extra = await pdfText(pdfs);
+    if (extra.trim()) { text = text + "\n\n" + extra; m.text = text; stats.pdfRead = (stats.pdfRead || 0) + 1; }
+    if (!kind && pdfs.some(p => /call ?sheet|callsheet/i.test(p.name))) kind = "calltime";
+  }
   if (!kind) {
     if (!m.seen) await seenRef.set({ at: new Date().toISOString(), call: null });
     markSeen(key);
@@ -925,6 +1050,7 @@ async function handleMail(m, account, counts, rereading) {
   }
   if (m.seen && rereading) counts.alreadySeen++;
   const r = parseEmail({ subject, fromName: from.name, fromEmail: from.address, text, received });
+  scopeAgency = r.agency || null;                      // look up only this agency's jobs
   if (kind !== "call") { await loadExistingCalls(); knownName(r, subject, text); }
   const remember = async id => {
     const callId = id || (m.seen && m.seen.call) || null;
@@ -1024,7 +1150,7 @@ async function handleMail(m, account, counts, rereading) {
   call.emails = [emailRecord({ ...m, key }, "call")];
   await db.collection("calls").doc(callId).set(call);
   await remember(callId);
-  existingCalls.push({ id: callId, ...call });
+  addKnown({ id: callId, ...call });
   counts.added++;
   if (m.seen) stats.restored++;
   await notifyPhone(call);
@@ -1084,7 +1210,7 @@ async function handleMail(m, account, counts, rereading) {
     }
     // Re-read calls the robot made earlier with today's better reader + the EP message page,
     // as long as you haven't changed them (no day marked done/canceled, not booked yet).
-    existingCalls = null;
+    resetCalls();
     await loadExistingCalls();
     let reread = 0;
     for (const c of existingCalls) {
@@ -1103,7 +1229,7 @@ async function handleMail(m, account, counts, rereading) {
       await db.collection("calls").doc(c.id).set({ ...body2, updatedAt: new Date().toISOString() });
       reread++;
     }
-    existingCalls = null;
+    resetCalls();
     await loadExistingCalls();
     report("notice", "Re-read", `Re-read ${reread} calls with the improved reader.`);
     report("notice", "Clean-up", `Removed ${removed} emails that were not availability checks; ${repaired} booking/release emails applied to their calls; ${flagged} marked "check details" because you had booked them.`);
@@ -1122,6 +1248,16 @@ async function handleMail(m, account, counts, rereading) {
     const box = seal(require("fs").readFileSync(__dirname + "/export-key.pem", "utf8"), { at: new Date().toISOString(), robotKey, calls });
     require("fs").writeFileSync("export.sealed.json", JSON.stringify(box));
     report("notice", "Export", `Sealed ${calls.length} calls.`);
+    process.exit(0);
+  }
+
+  // Restore a weekly backup (chosen by hand in the workflow): puts every job back as it was then
+  if (process.env.RESTORE) {
+    const { open } = require("./vault.js");
+    const data = open(serviceAccount.private_key, JSON.parse(require("fs").readFileSync("restore.sealed.json", "utf8")));
+    let n = 0;
+    for (const c of data.calls || []) { const { id, ...body } = c; await db.collection("calls").doc(id).set(body); n++; }
+    report("notice", "Restore", `Put back ${n} jobs from the backup of ${String(data.at || "").slice(0, 10)}.`);
     process.exit(0);
   }
 
@@ -1149,6 +1285,8 @@ async function handleMail(m, account, counts, rereading) {
   if (REBUILD || process.env.CLEANUP === "true") {
     report("notice", "Agencies", `${knownAgencies.length} known agency names.`);
     const n = await mergeDuplicates();
+    const keyed = await backfillAgencyKeys();
+    report("notice", "Agency keys", `Tagged ${keyed} jobs with their agency (for cheap look-ups).`);
     // remove far-away dates an older reader picked up from page footers (e.g. "Fri 18 Jun" next year)
     let odd = 0;
     const far = new Date(Date.now() + 210 * 864e5).toISOString().slice(0, 10);
@@ -1203,7 +1341,7 @@ async function handleMail(m, account, counts, rereading) {
     for (const [i, c] of accountCounts) report("notice", `Account ${i + 1}`, `Looked at ${c.looked} emails in ${c.folders} folders: ${c.alreadySeen} already seen, ${c.notACall} not availability checks, ${c.added} new calls added, ${c.updated} calls updated${c.errors ? `, ${c.errors} emails skipped after an error` : ""}.`);
   }
   if (REBUILD) {
-    existingCalls = null;
+    resetCalls();
     await loadExistingCalls();
     const today = londonDate();
     const old = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -1218,10 +1356,14 @@ async function handleMail(m, account, counts, rereading) {
   }
   if (Object.keys(why).length) report("notice", "Not matched – why", Object.entries(why).sort((a, b) => b[1] - a[1]).map(([k, v]) => k + " " + v).join(" · "));
   if (epu.found) report("notice", "EP booking updates", `${epu.found} emails; page opened ${epu.opened}, needed a login ${epu.login}; said booked ${epu.booked}, released ${epu.released}, unclear ${epu.unclear}; matched to a job ${epu.matched}.`);
+  if (stats.pdfRead || stats.pdfFailed) report("notice", "Call sheets", `Read ${stats.pdfRead || 0} PDF attachments` + (stats.pdfFailed ? `, ${stats.pdfFailed} couldn't be read` : "") + ".");
   if (REBUILD) report("notice", "Re-read everything", `Booking emails: ${stats.booked[0]} found, ${stats.booked[1]} matched to a job, ${stats.booked[2]} added as new booked jobs. ` +
     `Release emails: ${stats.released[0]} found, ${stats.released[1]} matched. Answer confirmations: ${stats.replied[0]} found, ${stats.replied[1]} matched. ` +
     `Call times: ${stats.calltime[0]} found, ${stats.calltime[1]} matched. Requests brought back: ${stats.restored}. Jobs amended by later emails (instead of a new copy): ${stats.amended}. Old requests never answered (now "Expired"): ${stats.expired || 0}.`);
   try { await saveSeenCache(); } catch (e) { /* only a speed-up */ }
+  let health = null;
+  try { health = await writeHealth(accountCounts, failed); } catch (e) { report("warning", "Health", "Couldn't write the robot report (" + (e.code || e.name) + ")."); }
+  try { await weeklyBackup(health); } catch (e) { report("warning", "Backup", "Backup failed (" + (e.code || e.name) + ")."); }
   try { await refreshPendingPortalPages(); } catch (e) { report("warning", "EP pages", "Could not refresh EP pages (" + (e.code || e.name) + ")."); }
   if (portal.read + portal.failed + portal.login) {
     if (process.env.PORTAL_DEBUG) report("notice", "EP page check", `pages: ${portal.read}; with "recorded your response": ${portal.recorded}; with answer buttons: ${portal.radios}; with ticked answers: ${portal.ticked}; mostly script (built in the browser): ${portal.scripts}; with dates found: ${portal.dated}; answer shapes: ${Object.entries(shapes).map(([k, v]) => k + " " + v).join(", ") || "none"}`);
