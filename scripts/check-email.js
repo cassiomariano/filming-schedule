@@ -987,6 +987,7 @@ async function handleMail(m, account, counts, rereading) {
     for (const c of existingCalls) {
       if (!String(c.source || "").startsWith("email") || !["pending", "available"].includes(c.status)) continue;
       if ((c.dates || []).some(e => e.state || e.callTime)) continue;
+      if ((c.emails || []).length > 1) continue;          // built from several emails: don't re-read from the first one only
       const m = String(c.emailFrom || "").match(/^(.*?)\s*<([^>]*)>/) || [];
       const body = String(c.rawEmail || "").split("\n").slice(2).join("\n");
       const r = parseEmail({ subject: c.emailSubject || "", fromName: m[1], fromEmail: m[2], text: body, received: c.received });
