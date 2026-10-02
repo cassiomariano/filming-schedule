@@ -221,6 +221,7 @@ a.btn{text-decoration:none}
 .s-done{background:var(--st-done);color:var(--st-done-fg)}
 .s-released{background:var(--st-released);color:var(--st-released-fg)}
 .s-canceled{background:var(--st-canceled);color:var(--st-canceled-fg)}
+.s-lapsed{background:var(--st-canceled);color:var(--st-canceled-fg)}
 .s-expired{background:var(--st-canceled);color:var(--st-canceled-fg)}
 .s-declined{background:var(--st-declined);color:var(--st-declined-fg)}
 
@@ -308,6 +309,11 @@ textarea.inp{min-height:84px;resize:vertical}
 .drow .dd{flex:1 1 140px;min-width:0}
 .drow .dk{flex:0 0 84px}
 .drow .dst{flex:0 0 112px}
+.justin{border:2px solid var(--accent);border-radius:14px;padding:4px 12px 12px;margin-bottom:10px;background:var(--accent-soft)}
+.justin > .wk{margin:12px 0 2px}
+.justin > p.src{margin:0 0 10px !important}
+.up.fresh{box-shadow:0 0 0 1px var(--accent)}
+.freshline{font-size:12px;font-weight:700;color:var(--accent);margin-bottom:4px}
 .newinfo{font-size:11.5px;font-weight:700;color:var(--accent);margin-left:6px;white-space:nowrap}
 .mails{display:flex;flex-direction:column;gap:6px;margin-top:6px}
 .mails details{border:1px solid var(--line);border-radius:8px;background:var(--surface-2);padding:6px 10px}
@@ -390,17 +396,26 @@ const STATUSES = [
   {k:"done",      label:"Done / worked", short:"Done"},
   {k:"declined",  label:"Declined", short:"Declined"},
   {k:"expired",   label:"Expired – never answered", short:"Expired"},
+  {k:"lapsed",    label:"Not booked – dates passed", short:"Not booked"},
   {k:"released",  label:"Released", short:"Released"},
   {k:"canceled",  label:"Canceled", short:"Canceled"},
 ];
 const SMAP = Object.fromEntries(STATUSES.map(s => [s.k, s]));
 /* the name to show for a call: production, else the email subject */
+/* old jobs tidy themselves: once every date has passed, a booked job is "worked", an unanswered
+   one "expired", and one you said yes to that never got booked "not booked" */
+function tidy(c){
+  const ds = (c.dates||[]).map(e => e.d).filter(Boolean);
+  if (!ds.length || ds.some(d => d >= TODAY)) return c;
+  const map = {confirmed:"done", pending:"expired", available:"lapsed"};
+  return map[c.status] ? {...c, status: map[c.status], tidied: c.status} : c;
+}
 function nameOf(c){ return (c.project || "").trim() || (c.emailSubject || "").trim() || "No production name – open to add"; }
 /* what each status means, in plain words, for the Upcoming cards */
-const MEANS = {pending:"New – reply needed", available:"Available – waiting to hear", confirmed:"Booked ✓", done:"Worked", declined:"Declined", expired:"Expired – never answered", released:"Released", canceled:"Canceled"};
+const MEANS = {pending:"New – reply needed", available:"Available – waiting to hear", confirmed:"Booked ✓", done:"Worked", declined:"Declined", expired:"Expired – never answered", lapsed:"Not booked – dates passed", released:"Released", canceled:"Canceled"};
 const ACTIVE = new Set(["pending","available","confirmed"]);
 const STRUCK = new Set(["declined","released","canceled"]);
-const PRIORITY = {confirmed:0, available:1, pending:2, done:3, released:4, canceled:5, declined:6};
+const PRIORITY = {confirmed:0, available:1, pending:2, done:3, lapsed:4, expired:5, released:6, canceled:7, declined:8};
 const DOW = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
@@ -452,23 +467,37 @@ function normAgency(a){ const s = (a||"").trim(); const k = s.toLowerCase().repl
    even when the rest of the booking is still on */
 const DAY_STATES = [["", "Same as the call"], ["pending", "New (not answered)"], ["available", "Available (on hold)"], ["worked", "Worked"], ["released", "Released"], ["canceled", "Canceled"]];
 function dayStatus(c, e){
+  const st = dayStatusRaw(c, e);
+  if (e.d < TODAY){                                    // the day has passed
+    if (st === "confirmed") return "done";             // booked and gone: worked (tap to change)
+    if (st === "pending") return "expired";
+    if (st === "available") return "lapsed";
+  }
+  return st;
+}
+function dayStatusRaw(c, e){
   if (e.state === "released") return "released";
   if (e.state === "canceled") return "canceled";
-  if (e.state === "available") return "available";
-  if (e.state === "pending") return "pending";           // a day added by a later email, not answered yet       // production kept this day as "available / on hold"
+  if (e.state === "available") return "available";       // production kept this day "available / on hold"
+  if (e.state === "pending") return "pending";           // a day added by a later email, not answered yet
   if (e.state === "worked" || e.done) return "done";
+  // what you ticked for this day on the agency page
+  if (e.answer === "no" && (c.status === "pending" || c.status === "available")) return "declined";
+  if (e.answer === "yes" && c.status === "pending") return "available";
   return c.status;
 }
 
 /* tap a day: automatic → available, on hold (yellow) → done (blue) → canceled (grey) → automatic */
 const CYCLE = ["", "available", "worked", "canceled"];
+const CYCLE_PAST = ["", "worked", "canceled", "released"];
 const CYCLE_WORDS = {"": "back to automatic colour", available: "available / on hold (yellow)", worked: "done ✓ (blue)", canceled: "canceled (grey)", released: "released (grey)"};
 async function cycleDay(id, i){
   const c = S.calls.get(id); if (!c || !c.dates || !c.dates[i]) return;
   const dates = c.dates.map(e => ({...e}));
   const e = dates[i];
   const now = e.state || (e.done ? "worked" : "");
-  const next = CYCLE[(CYCLE.indexOf(now) + 1) % CYCLE.length];
+  const cyc = e.d < TODAY ? CYCLE_PAST : CYCLE;          // a past day: worked / canceled / released
+  const next = cyc[(Math.max(0, cyc.indexOf(now)) + 1) % cyc.length];
   delete e.done;
   if (next) e.state = next; else delete e.state;
   try {
@@ -571,8 +600,8 @@ function renderCalendar(){
     }
     h += `</div></div>`;
   } else {
-    const from = key(m) < TODAY && key(new Date(m.getFullYear(), m.getMonth()+1, 0)) >= TODAY ? TODAY : key(m);
-    const to = key(new Date(m.getFullYear(), m.getMonth()+2, 0));
+    const from = key(m);                                   // exactly the month in the title
+    const to = key(new Date(m.getFullYear(), m.getMonth()+1, 0));
     const days = [...idx.keys()].filter(d => d >= from && d <= to).sort();
     let any = false;
     h += `<div class="agenda">`;
@@ -586,7 +615,7 @@ function renderCalendar(){
       items.forEach(({c,e}) => { const ds = dayStatus(c,e); h += `<button class="acard" data-open="${c.id}"><span class="bar8 ${clsS(ds)}"></span><span class="main"><span class="ttl"${STRUCK.has(ds)?' style="text-decoration:line-through"':''}>${e.night?"☾ ":""}${esc(nameOf(c))}${ds!==c.status?` <span class="pill ${clsS(ds)}">day ${SMAP[ds].short.toLowerCase()}</span>`:""}${c.attention?` <span class="flag">● attention</span>`:""}</span><span class="sub">${esc([c.agency, c.role, e.loc || (e.kind==="fit"?c.fitLocation:c.filmLocation) || c.location].filter(Boolean).join(" · "))}</span></span><span class="kind">${kindName(e.kind)}</span></button>`; });
       h += `</div></div>`;
     }
-    if (!any) h += `<div class="empty"><h2>Nothing scheduled</h2><p>No dates for the selected statuses between ${fmtDM(from)} and ${fmtDM(to)}.</p></div>`;
+    if (!any) h += `<div class="empty"><h2>Nothing scheduled</h2><p>No dates in ${MONTHS[m.getMonth()]} ${m.getFullYear()} for the statuses ticked above. Use ◀ ▶ to change month.</p></div>`;
     h += `</div>`;
   }
   main.innerHTML = h;
@@ -709,29 +738,39 @@ function upcomingHTML(cl){
     ["available", "Waiting to hear", "You said you're available; production hasn't confirmed yet."],
     ["pending", "New – reply needed", "Accept or decline these."],
   ];
-  h += `<div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Available – waiting to hear</span><span><i class="sw s-pending"></i>New</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released</span><span>· Tap a day: yellow → blue → grey → back</span></div>`;
+  h += `<div class="keyrow"><span><i class="sw s-confirmed"></i>Booked</span><span><i class="sw s-available"></i>Available – waiting to hear</span><span><i class="sw s-pending"></i>New</span><span><i class="sw s-done"></i>Done (worked)</span><span><i class="sw s-canceled"></i>Canceled / released / said no</span><span>· Tap a day: yellow → blue → grey → back</span></div>`;
+  // Just in: requests from the last 3 days, and jobs a later email changed
+  const recent = key(new Date(Date.now() - 3 * 864e5));
+  const justIn = callList().filter(c => (c.status === "pending" || c.status === "available" || c.newInfo) && ACTIVE.has(c.status) &&
+      ((c.received || "") >= recent || c.newInfo) && (!(c.dates||[]).length || (c.dates||[]).some(e => e.d >= TODAY)))
+    .sort((a,b) => (b.received||"").localeCompare(a.received||""));
+  const inJust = new Set(justIn.map(c => c.id));
+  if (justIn.length) h += `<section class="justin"><h3 class="wk">Just in · ${justIn.length}</h3><p class="src" style="margin:-6px 0 0">New availability checks from the last 3 days, and jobs a later email changed.</p><div class="ups">${justIn.map(c => upCard(c, cl, true)).join("")}</div></section>`;
   for (const [st, title, sub] of sections){
-    const list = jobs.filter(c => c.status === st);
+    const list = jobs.filter(c => c.status === st && !inJust.has(c.id));
     if (!list.length) continue;
     h += `<h3 class="wk">${title} · ${list.length}</h3><p class="src" style="margin:-6px 0 0">${sub}</p><div class="ups">${list.map(c => upCard(c, cl)).join("")}</div>`;
   }
   if (undated.length) h += `<h3 class="wk">No dates yet</h3><div class="ups">${undated.map(c => upCard(c, cl)).join("")}</div>`;
   return h;
 }
-function upCard(c, cl){
+function upCard(c, cl, fresh){
   const days = (c.dates||[]).slice().sort((a,b)=>a.d.localeCompare(b.d));
   const line = kind => {
     const list = days.filter(e => e.kind === kind);
     if (!list.length) return "";
     return `<div class="uprow"><span class="uplab">${kindName(kind)}</span><span class="updays">${list.map(e => {
-      const st = dayStatus(c,e); const off = st==="released"||st==="canceled";
+      const st = dayStatus(c,e); const off = st==="released"||st==="canceled"||st==="declined";
       const where = placeOf(c, e);
-      return `<button type="button" class="upday ${clsS(st)}${off?" off":""}${cl.has(e.d)&&!off?" upclash":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${esc(SMAP[st]?.label||"")}${cl.has(e.d)?" · clash with another call":""} · ${DAY_TIP}">${fmtShort(e.d)}${e.night?" ☾":""}${e.callTime?` <small>· call ${esc(e.callTime)}</small>`:""}${where?` <small>@ ${esc(where)}</small>`:""}${off?` <small>(${st})</small>`:""}${st==="done"?" ✓ worked":""}</button>`;
+      const said = e.answer === "no" ? " <small>✕ you said no</small>" : e.answer === "yes" && !off ? " <small>✓ you said yes</small>" : "";
+      return `<button type="button" class="upday ${clsS(st)}${off?" off":""}${cl.has(e.d)&&!off?" upclash":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${esc(SMAP[st]?.label||"")}${cl.has(e.d)?" · clash with another call":""} · ${DAY_TIP}">${fmtShort(e.d)}${e.night?" ☾":""}${e.callTime?` <small>· call ${esc(e.callTime)}</small>`:""}${where?` <small>@ ${esc(where)}</small>`:""}${off && e.answer !== "no" ? ` <small>(${st})</small>` : ""}${said}${st==="done"?" ✓ worked":""}</button>`;
     }).join("")}</span></div>`;
   };
   const du = c.status === "pending" ? dueText(c.respondBy) : null;
   const acts = replyHTML(c);
-  return `<article class="up ${clsS(c.status)}-edge">
+  const got = c.received ? (c.received === TODAY ? "today" : c.received === key(new Date(Date.now() - 864e5)) ? "yesterday" : fmtDay(c.received)) : "";
+  return `<article class="up ${clsS(c.status)}-edge${fresh ? " fresh" : ""}">
+    ${fresh ? `<div class="freshline">${c.newInfo ? "● " + esc(c.newInfoText || "Updated by a later email") : "● New availability check"}${got ? " · received " + got : ""}</div>` : ""}
     <div class="uphead" data-open="${c.id}" role="button" tabindex="0">
       <span class="upst ${clsS(c.status)}">${esc(MEANS[c.status]||c.status)}</span>
       <h4>${esc(nameOf(c))}</h4>
@@ -782,7 +821,7 @@ function renderCalls(){
       <div class="body" data-open="${c.id}" role="button" tabindex="0">
         <div class="line1"><span class="proj">${esc(nameOf(c))}</span><span class="pill ${clsS(c.status)}">${SMAP[c.status]?.short||c.status}</span>${c.attention?`<span class="flag">● Attention</span>`:""}${c.newInfo?`<span class="newinfo" title="${esc(c.newInfoText||"")}">● Updated${c.newInfoText?" – "+esc(c.newInfoText):""}</span>`:""}</div>
         <div class="meta">${c.agency?`<span><b>${esc(c.agency)}</b></span>`:""}${c.role?`<span>${esc(c.role)}</span>`:""}${(c.location||c.filmLocation)?`<span>📍 ${esc(c.location||c.filmLocation)}</span>`:""}${c.received?`<span>Received ${fmtDM(c.received)}</span>`:""}</div>
-        ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"; return `<button type="button" class="dchip ${clsS(st)} ${e.kind}${off?" off":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${kindName(e.kind)} · ${SMAP[st].short} · ${DAY_TIP}">${e.kind!=="film"?kindLetter(e.kind)+" ":""}${fmtDay(e.d)}${e.night?" ☾":""}${st==="done"?" ✓":""}</button>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
+        ${shown.length?`<div class="dates">${shown.map(e => { const st = dayStatus(c,e); const off = st==="released"||st==="canceled"||st==="declined"; return `<button type="button" class="dchip ${clsS(st)} ${e.kind}${off?" off":""}" data-cycle="${c.id}|${c.dates.indexOf(e)}" title="${kindName(e.kind)} · ${SMAP[st].short} · ${DAY_TIP}">${e.kind!=="film"?kindLetter(e.kind)+" ":""}${fmtDay(e.d)}${e.night?" ☾":""}${st==="done"?" ✓":""}${e.answer==="no"?" ✕":""}</button>`; }).join("")}${ds.length>shown.length?`<span class="dchip">+${ds.length-shown.length}</span>`:""}</div>`:""}
         ${du?`<span class="due${du.late?" late":""}">${esc(du.txt)}</span>`:""}
       </div>
       <div class="acts">${replyHTML(c)}${c.status==="confirmed" && lastDate(c) && lastDate(c) < TODAY ? `<button class="btn small" data-set="done" data-id="${c.id}">Mark done</button>` : ""}</div>
@@ -1215,7 +1254,7 @@ function showLogin(msg){
     $("#addBtn").hidden = false; $("#exportBtn").hidden = false;
     main.innerHTML = `<div class="empty"><h2>Loading your calls</h2></div>`;
     unsub = db.collection("calls").onSnapshot({includeMetadataChanges: true}, snap => {
-      S.calls = new Map(snap.docs.map(d => [d.id, {id: d.id, ...d.data()}]));
+      S.calls = new Map(snap.docs.map(d => [d.id, tidy({id: d.id, ...d.data()})]));
       S.loaded = true;
       setSync(snap.metadata.fromCache ? "" : "live", snap.metadata.fromCache ? "Offline copy" : `Live · ${S.calls.size} calls`);
       if (!S.calls.size){
