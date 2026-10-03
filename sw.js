@@ -1,7 +1,7 @@
 /* Service worker: keeps the app itself on the phone so it opens (even offline).
    Your calls are NOT stored here – Firebase keeps its own offline copy.
    Change VERSION when you change the list below, so phones drop the old copies. */
-const VERSION = "fs-shell-v7";
+const VERSION = "fs-shell-v8";
 const SHELL = ["./", "index.html", "parser.js", "money.js", "firebase-config.js", "manifest.webmanifest", "icon-180.png", "icon.svg"];
 
 // install: save the app files (one missing file doesn't stop the others)
@@ -32,7 +32,7 @@ self.addEventListener("fetch", event => {
 
   // internet first (so updates show straight away); save a fresh copy; use the saved copy when offline
   event.respondWith(
-    fetch(req).then(res => {
+    fetch(req, {cache: "no-cache"}).then(res => {          // asks the server, never an old copy in the browser
       if (res.ok){ const copy = res.clone(); caches.open(VERSION).then(c => c.put(cacheKey, copy)); }
       return res;
     }).catch(() => caches.match(cacheKey).then(hit => hit || caches.match("./")))

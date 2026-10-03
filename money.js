@@ -69,7 +69,8 @@
     return out;
   }
   var LABELS = [
-    ["net", /\bnet\b|total (?:paid|payment|payable|due|to pay|transferred)|amount (?:paid|payable|transferred|due)|payment amount|you(?:'ll| will) receive|paid to you|balance (?:paid|due)|total remitted/i],
+    ["net", /\bnet\b|total (?:paid|payment|payable|to pay|transferred)|amount (?:paid|payable|transferred)|payment amount|you(?:'ll| will) receive|paid to you|balance paid|total remitted/i],
+    ["due", /total due|amount due|balance due/i],
     ["vat", /\bvat\b/i],
     ["ep", /admin(?:istration)?\s*fee|\bEP\b.*fee|entertainment partners|processing fee|platform fee|payroll fee/i],
     ["commission", /commission|agency fee|agent'?s? fee|\bcomm\b/i],
@@ -79,14 +80,16 @@
   // jobs = [{ id, name, agency, worked: ["YYYY-MM-DD", ...] }]
   function readRemittance(text, jobs, today) {
     var lines = String(text || "").split(/\r?\n/).map(function (l) { return l.replace(/\t/g, "  ").trim(); }).filter(Boolean);
-    var res = { gross: null, commission: null, ep: null, vat: null, net: null, paidOn: null, items: [], kind: /\binvoice\b/i.test(text) && !/remittance|payment advice|paid/i.test(text) ? "invoice" : "remittance" };
-    var vatSum = 0, vatSeen = false;
+    var res = { gross: null, commission: null, ep: null, vat: null, net: null, due: null, paidOn: null, items: [], kind: /\binvoice\b/i.test(text) && !/remittance|payment advice|paid/i.test(text) ? "invoice" : "remittance" };
+    var vatSum = 0, vatSeen = false, other = [];
     lines.forEach(function (line, i) {
       var ds = datesIn(line);
       var nums = amountsIn(line, ds);
       var label = null;
       for (var k = 0; k < LABELS.length; k++) if (LABELS[k][1].test(line)) { label = LABELS[k][0]; break; }
       // a label alone on its line, with the amount on the next one (tables pasted from a PDF)
+      var heading = line.split(/\s{2,}/).length >= 4 && !nums.length && !ds.length;   // a table's column names (4 or more, spaced apart)
+      if (heading) return;
       if (label && label !== "paidOn" && !nums.length && lines[i + 1] && !LABELS.some(function (L) { return L[1].test(lines[i + 1]); })) nums = amountsIn(lines[i + 1], datesIn(lines[i + 1]));
       if (label === "paidOn") { var pd = ds.length ? ds : datesIn(lines[i + 1] || ""); if (pd.length) res.paidOn = pd[0].d; return; }
       if (label && nums.length) {
@@ -98,14 +101,29 @@
       // a line for one work day: a date and an amount ("02/10/2026  Basic fee  99.68")
       if (ds.length && nums.length && !/period|week ending|invoice date|due date/i.test(line)) {
         res.items.push({ d: ds[0].d, desc: line.replace(DATE, "").replace(AMT, "").replace(/\s+/g, " ").trim().slice(0, 60), amount: nums[nums.length - 1] });
+      } else if (!ds.length && nums.length === 1) {
+        // an amount with a name we don't know (e.g. "Travel expenses £20.00"): used only if the sum proves it
+        other.push({ what: line.replace(AMT, "").replace(/[:\s]+$/, "").replace(/\s+/g, " ").trim().slice(0, 40), amount: nums[0] });
       }
     });
     if (vatSeen) res.vat = r2(vatSum);
+    // "Total Due": what you're paid when nothing else says so; before the deductions when a net line follows
+    if (res.due !== undefined && res.due !== null) {
+      if (res.net === null) res.net = res.due;
+      else if (res.due > res.net && (res.commission !== null || res.ep !== null)) res.gross = res.due;
+    }
+    delete res.due;
     // the sum of the day lines is the gross when no gross total is written
     var itemsSum = r2(res.items.reduce(function (s, x) { return s + x.amount; }, 0));
     if (res.gross === null && res.items.length) res.gross = itemsSum;
     if (res.net === null && res.gross !== null && (res.commission !== null || res.ep !== null)) res.net = r2(res.gross - (res.commission || 0) - (res.ep || 0) - (res.vat || 0));
     if (res.net === null && res.gross !== null && res.commission === null && res.ep === null && res.vat === null) res.net = res.gross;
+    // net ≠ gross − deductions: an extra amount explains the difference (expenses added, or a fee taken off)
+    if (res.gross !== null && res.net !== null && (res.commission !== null || res.ep !== null)) {
+      var gap = r2(res.net - (res.gross - (res.commission || 0) - (res.ep || 0) - (res.vat || 0)));
+      var hit = Math.abs(gap) > 0.02 && other.filter(function (o) { return Math.abs(Math.abs(o.amount) - Math.abs(gap)) <= 0.02; })[0];
+      if (hit) res.extras = [{ what: hit.what || "Other", amount: gap > 0 ? Math.abs(hit.amount) : -Math.abs(hit.amount) }];
+    }
     res.days = res.items.map(function (x) { return x.d; }).filter(function (d, i, a) { return a.indexOf(d) === i; }).sort();
     if (!res.paidOn && res.kind === "remittance") res.paidOn = today || null;
     res.jobs = matchJobs(res, text, jobs || []);
@@ -216,7 +234,7 @@
         if (/Total due from the Hirer/i.test(l) && amt) p.gross = Number(amt[1].replace(/,/g, ""));
         if (/Total deposited to your account/i.test(l) && amt) p.net = Number(amt[1].replace(/,/g, ""));
       });
-      if (p.gross === null) p.gross = r2(p.perDay.reduce(function (s, x) { return s + (x.total || 0); }, 0));
+      if (p.gross === null && p.perDay.length) p.gross = r2(p.perDay.reduce(function (s, x) { return s + (x.total || 0); }, 0));
       p.vat = p.epVat !== null || p.commissionVat !== null ? r2((p.epVat || 0) + (p.commissionVat || 0)) : null;
       p.fees = p.ep !== null || p.commission !== null ? r2((p.ep || 0) + (p.commission || 0)) : null;
       if (p.net === null && p.gross !== null) p.net = r2(p.gross - (p.fees || 0) - (p.vat || 0));
@@ -305,7 +323,7 @@
   function readTTRemittance(text) {
     var blocks = String(text).split(/(?=Payment Remittance)/i).filter(function (b) { return /Total Paid/i.test(b); });
     return blocks.map(function (b) {
-      var p = blankPayment("tt-pdf", "Talent Talks"), names = [], waiting = [];
+      var p = blankPayment("tt-pdf", "Talent Talks"), names = [], waiting = [], other = [];
       b.split(/\r?\n/).forEach(function (l) {
         var ds = datesIn(l), amt = endAmount(l);
         if (/Remittance No\s*:/i.test(l)) { p.invoiceNo = l.replace(/^.*Remittance No\s*:\s*/i, "").trim(); return; }
@@ -321,8 +339,21 @@
           return;
         }
         if (/Total Paid/i.test(l)) { p.net = amt; return; }
+        // any other line with an amount (e.g. expenses with no commission, or a fee): kept with its sign
+        var sign = /-\s*£?\s*\d[\d,]*\.\d{2}\s*$/.test(l) ? -1 : 1;
+        other.push({ what: l.replace(/-?\s*£?\s*\d{1,3}(?:,\d{3})*\.\d{2}\s*$/, "").replace(/\s+/g, " ").trim().slice(0, 40), amount: r2(sign * amt), afterSubtotal: p.gross !== null });
       });
-      return finishPayment(p, names);
+      finishPayment(p, names);
+      // what's paid on top of (or taken off) the subtotal, only when the sum proves it
+      if (p.gross !== null && p.net !== null) {
+        var gap = r2(p.net - (p.gross - (p.commission || 0) - (p.vat || 0)));
+        if (Math.abs(gap) > 0.02) {
+          var after = other.filter(function (o) { return o.afterSubtotal; });
+          var tot = r2(after.reduce(function (t, o) { return t + o.amount; }, 0));
+          if (after.length && Math.abs(tot - gap) <= 0.02) p.extras = after.map(function (o) { return { what: o.what, amount: o.amount }; });
+        }
+      }
+      return p;
     });
   }
 
@@ -338,7 +369,7 @@
     else {
       var r = readRemittance(t, [], today);
       list = [{ source: "text", project: "", agency: "", invoiceNo: "", status: r.kind === "invoice" ? "invoice" : "paid", paidOn: r.paidOn, days: r.days, perDay: [], hours: null,
-        gross: r.gross, ep: r.ep, commission: r.commission, vat: r.vat, fees: r.ep !== null || r.commission !== null ? r2((r.ep || 0) + (r.commission || 0)) : null, net: r.net }];
+        gross: r.gross, ep: r.ep, commission: r.commission, vat: r.vat, fees: r.ep !== null || r.commission !== null ? r2((r.ep || 0) + (r.commission || 0)) : null, net: r.net, extras: r.extras }];
     }
     list.forEach(function (p) { p.job = matchPayment(p, t, jobs || []); });
     return list;
@@ -424,8 +455,11 @@
       out.push(!missing.length && !extra.length ? { ok: true, what: "Pays every day you worked (" + p.days.length + ")" }
         : { ok: false, what: (missing.length ? "Not paid yet: " + missing.join(", ") : "") + (missing.length && extra.length ? " · " : "") + (extra.length ? "Paid days not marked worked: " + extra.join(", ") : "") });
     }
+    if ((p.gross === null || p.gross === undefined) && p.net !== null && p.net !== undefined && p.source && p.source !== "text" && p.source !== "ep-table")
+      out.push({ ok: false, what: "The gross couldn't be read from this remittance – please send me this PDF" });
     if (p.gross !== null && p.net !== null && (p.commission !== null || p.ep !== null || p.vat !== null || (p.fees !== null && p.fees !== undefined))) {
-      var sum = r2(p.gross - (p.commission !== null || p.ep !== null ? (p.commission || 0) + (p.ep || 0) : (p.fees || 0)) - (p.vat || 0) - (p.ni || 0));
+      var plus = r2((p.extras || []).reduce(function (t, o) { return t + o.amount; }, 0));   // e.g. expenses paid with no commission
+      var sum = r2(p.gross - (p.commission !== null || p.ep !== null ? (p.commission || 0) + (p.ep || 0) : (p.fees || 0)) - (p.vat || 0) - (p.ni || 0) + plus);
       out.push(near(sum, p.net) ? { ok: true, what: "The sum is right: gross − deductions = net" } : { ok: false, what: "The sum doesn't add up: gross − deductions = " + sum.toFixed(2) + ", but it says " + p.net.toFixed(2) });
     }
     if (fees && p.gross && p.commission === null && p.ep === null && p.fees !== null && p.fees !== undefined) {
@@ -444,7 +478,7 @@
         if (!near(paidFee, onAll[ref]) && near(paidFee, onPart[ref])) base = r2(p.gross - free);
       }
       var exp = expectedNet(base, fees);
-      exp.net = r2(p.gross - exp.commission - exp.ep - exp.vat);
+      exp.net = r2(p.gross - exp.commission - exp.ep - exp.vat - (p.ni || 0) + (p.extras || []).reduce(function (t, o) { return t + o.amount; }, 0));
       var noFee = base !== p.gross ? " (none on the £" + free.toFixed(2) + " meal)" : "";
       var said = { agency: "usual for this agency", remittance: "from an earlier remittance", you: "you typed", said: "the remittance says" }[fees.from] || "the emails say";
       if (p.commission !== null) out.push(near(p.commission, exp.commission) ? { ok: true, what: "Agency commission is " + fees.agency + "%" + noFee } : { ok: false, what: "Agency commission is " + (p.commission / base * 100).toFixed(1) + "% (" + said + " " + fees.agency + "%)" });

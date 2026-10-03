@@ -143,5 +143,10 @@ ok("Talent Talks: checked against the 12.5% written on it when the emails don't 
 ok("No name from the remittance is kept", JSON.stringify(cc.concat(tt)).indexOf("Test Person") === -1);
 
 ok("A payment from an agency never goes to a job with no agency", M.readPayments(require("fs").readFileSync(__dirname + "/fixtures/ep-remittances.txt", "utf8"), [{ id: "n", name: "Other work", agency: "", worked: ["2025-03-17", "2025-02-25"] }], "x").every(p => p.job === null));
+ok("Any remittance pasted as text: 'Total Due' before deductions is the gross, 'Net Payment' the net", (() => { const r = M.readRemittance(ccText, [], "x"); return r.gross === 500 && r.commission === 100 && r.vat === 20 && r.net === 380; })(), M.readRemittance(ccText, [], "x"));
+const ttX = M.readPayments(ttText.replace(/(\s+Total Paid\s+)£102\.00/, "\n     Travel Expenses        £20.00$1£122.00"), [], "x")[0];
+ok("Talent Talks: expenses paid on top (no commission) are found by the sum and kept", ttX.net === 122 && ttX.extras && ttX.extras[0].amount === 20 && M.checkPayment(ttX, null, ttX.days).every(c => c.ok), ttX);
+const pasted = M.readPayments("Remittance\nSubtotal: £130.00\nCommission 12.5%: -£16.25\nVAT on commission: -£3.25\nTravel expenses: £20.00\nTotal Paid: £130.50", [], "x")[0];
+ok("Pasted text: an extra amount is used only when it explains the sum (travel £20 added)", pasted.net === 130.5 && pasted.extras && pasted.extras[0].amount === 20 && M.checkPayment(pasted, null, null).every(c => c.ok), pasted);
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

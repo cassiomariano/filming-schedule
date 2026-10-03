@@ -517,8 +517,8 @@ details.more summary{cursor:pointer;font-weight:600;display:flex;gap:8px;align-i
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js"></script>
-<script src="parser.js"></script>
-<script src="money.js"></script>
+<script src="parser.js?v=8"></script>
+<script src="money.js?v=8"></script>
 <script>
 (() => {
 "use strict";
@@ -1413,7 +1413,7 @@ function payHTML(x, removable = true){
     ? amt(x.commission, "Commission") + amt(x.ep, "EP admin fee") : amt(x.fees, "Fees");
   return `<div class="paybox"><div class="paytop"><b>${esc(KIND_WORD2[x.kind] || "Payment")}</b>${x.paidOn ? `&nbsp;· ${x.kind === "invoice" ? "sent" : x.source === "ep-pdf" && !x.deposited ? "invoice date" : "deposited"} ${esc(fmtDM(x.paidOn))}` : ""}${x.invoiceNo ? `&nbsp;· no. ${esc(x.invoiceNo)}` : ""}
       <span style="flex:1"></span>${removable ? `<button class="btn small ghost" data-paydel="${esc(x.id)}" title="Remove this payment">✕</button>` : ""}</div>
-    <div class="payamts">${amt(x.gross, "Gross")}${fees}${amt(x.vat, "VAT")}${x.ni ? amt(x.ni, "NI") : ""}${amt(x.net, x.kind === "invoice" ? "Total" : "Net")}</div>
+    <div class="payamts">${amt(x.gross, "Gross")}${fees}${amt(x.vat, "VAT")}${x.ni ? amt(x.ni, "NI") : ""}${(x.extras || []).map(o => amt(o.amount, esc(o.what || "Other") + (o.amount > 0 ? " (added)" : ""))).join("")}${amt(x.net, x.kind === "invoice" ? "Total" : "Net")}</div>
     ${(x.days || []).length ? `<div class="src">Days: ${esc(x.days.map(fmtDay).join(", "))}${x.hours ? ` · ${x.hours} hours` : ""}</div>` : ""}
     ${breakdownHTML(x)}
     ${(x.checks || []).length ? `<ul class="checks">${x.checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what)}</li>`).join("")}</ul>` : ""}
@@ -1538,7 +1538,7 @@ function drawRemit(){
       const editable = p.source === "text";
       const inp = (k, l) => `<div class="fld"><label for="rm-${k}-${i}">${l}</label><input class="inp" id="rm-${k}-${i}" type="number" step="0.01" inputmode="decimal" value="${p[k] ?? ""}"></div>`;
       return `<section class="panel" style="margin:0"><h2>${esc(p.project || "Payment " + (i + 1))}${p.agency ? ` · ${esc(p.agency)}` : ""}</h2>
-        ${editable ? `<div class="three">${inp("gross", "Gross £")}${inp("commission", "Commission £")}${inp("ep", "EP fee £")}</div><div class="three">${inp("vat", "VAT £")}${inp("net", p.status === "invoice" ? "Total £" : "Net paid £")}<div class="fld"><label for="rm-on-${i}">${p.status === "invoice" ? "Sent on" : "Paid on"}</label><input class="inp" type="date" id="rm-on-${i}" value="${esc(p.paidOn || TODAY)}"></div></div>`
+        ${editable ? `<div class="three">${inp("gross", "Gross £")}${inp("commission", "Commission £")}${inp("ep", "EP fee £")}</div><div class="three">${inp("vat", "VAT £")}${inp("net", p.status === "invoice" ? "Total £" : "Net paid £")}<div class="fld"><label for="rm-on-${i}">${p.status === "invoice" ? "Sent on" : "Paid on"}</label><input class="inp" type="date" id="rm-on-${i}" value="${esc(p.paidOn || TODAY)}"></div></div>${(p.extras || []).length ? `<p class="src" style="margin:0">Also on it: ${p.extras.map(o => `${esc(o.what)} ${o.amount > 0 ? "+" : "−"}${money(Math.abs(o.amount))}`).join(", ")}</p>` : ""}`
           : payHTML({...p, kind: p.status === "pending" ? "pending" : "remittance", checks: []}, false)}
         <div class="fld"><label for="rm-job-${i}">For the job</label><select class="inp" id="rm-job-${i}" data-rmjob="${i}">${opts(p.target)}</select></div>
         ${checks.length ? `<ul class="checks">${checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what.replace("Paid days not marked worked:", "Paid for days not marked worked in this job – check it's the right job:"))}</li>`).join("")}</ul>` : ""}
@@ -1610,7 +1610,7 @@ function pullRemit(){
 }
 /* what a payment keeps: the figures, never the PDF or anything that identifies you */
 function payRecord(p, fees, worked, rate, other){
-  const keep = ["source", "deposited", "project", "agency", "invoiceNo", "paidOn", "taxPoint", "days", "perDay", "hours", "gross", "ep", "epVat", "commission", "commissionVat", "fees", "ni", "feesSaid", "vat", "net", "text"];
+  const keep = ["source", "deposited", "project", "agency", "invoiceNo", "paidOn", "taxPoint", "days", "perDay", "hours", "gross", "ep", "epVat", "commission", "commissionVat", "fees", "ni", "extras", "feesSaid", "vat", "net", "text"];
   const out = {id: "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), kind: p.status === "invoice" ? "invoice" : p.status === "pending" ? "pending" : "remittance", savedAt: new Date().toISOString()};
   keep.forEach(k => { if (p[k] !== undefined) out[k] = p[k]; });
   out.checks = Money.checkPayment(out, fees, worked, rate, other || []);
