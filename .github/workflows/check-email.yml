@@ -9,59 +9,28 @@ on:
     - cron: "7,37 * * * *"        # every 30 minutes (GitHub may run it a few minutes late)
   workflow_dispatch:
     inputs:
+      mode:
+        description: "What to do (normal = read new mail)"
+        type: choice
+        default: normal
+        options: [normal, rescan, rederive, test_alert, export, backup, restore, migrate]
       days_back:
-        description: "How many days of email to look at"
-        default: "2"
-      cleanup:
-        description: "Also remove wrongly added calls (not from casting agencies)"
-        type: boolean
-        default: false
-      test_alert:
-        description: "Send a test notification to my phone"
-        type: boolean
-        default: false
-      find:
-        description: "Find an email: words from its subject (reports only yes/no facts)"
-        default: ""
-      rebuild:
-        description: "Re-read everything: all folders, oldest first, work out each job's status again (no phone alerts)"
-        type: boolean
-        default: false
-      export:
-        description: "Private export (sealed) to the vault branch"
-        type: boolean
-        default: false
-      patch:
-        description: "Apply the sealed fixes in patch.sealed.json"
-        type: boolean
-        default: false
-      backup:
-        description: "Make a sealed backup now (it also happens every Sunday)"
-        type: boolean
-        default: false
+        description: "rescan: how many days of email to read again (only missing emails are added)"
+        default: "7"
       restore:
-        description: "Restore a backup: type its date (YYYY-MM-DD) – replaces your jobs with that copy"
+        description: "restore: the backup's date (YYYY-MM-DD) – replaces your jobs with that copy"
         default: ""
-      survey:
-        description: "Count words in agency email subjects (counts only)"
-        type: boolean
-        default: false
-      portal_debug:
-        description: "Check EP message pages now and report their format (counts only)"
-        type: boolean
-        default: false
 
 concurrency:
-  # never run two checks at the same time; a "re-read everything" run has its own lane,
-  # so the 5-minute checks can't push it out of the queue
-  group: check-email-${{ github.event.inputs.rebuild == 'true' && 'rebuild' || 'normal' }}
+  # never two runs at the same time (a run waits for the one before it)
+  group: check-email
 
 jobs:
   check:
     runs-on: ubuntu-latest
     permissions:
       contents: write             # only used to put a sealed export on the "vault" branch
-    timeout-minutes: 150
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -69,32 +38,25 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --omit=dev
+      - name: Test gate – the rules must pass every known case before they touch your schedule
+        run: npm test > /dev/null
       - name: Fetch the backup to restore
-        if: ${{ github.event.inputs.restore != '' && github.event.inputs.restore != null }}
+        if: ${{ github.event.inputs.mode == 'restore' }}
         run: |
           git clone -q --depth 1 -b backups "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" /tmp/b
           cp "/tmp/b/backups/${{ github.event.inputs.restore }}.sealed.json" restore.sealed.json
       - run: node scripts/check-email.js
         env:
-          DAYS_BACK: ${{ github.event.inputs.days_back || '2' }}
-          CLEANUP: ${{ github.event.inputs.cleanup || 'false' }}
+          MODE: ${{ github.event.inputs.mode || 'normal' }}
+          DAYS_BACK: ${{ github.event.inputs.days_back || '7' }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          TEST_ALERT: ${{ github.event.inputs.test_alert || 'false' }}
-          FIND: ${{ github.event.inputs.find || '' }}
-          REBUILD: ${{ github.event.inputs.rebuild || 'false' }}
-          EXPORT: ${{ github.event.inputs.export || 'false' }}
-          PATCH: ${{ github.event.inputs.patch || 'false' }}
-          BACKUP: ${{ github.event.inputs.backup || 'false' }}
-          RESTORE: ${{ github.event.inputs.restore || '' }}
-          SURVEY: ${{ github.event.inputs.survey || 'false' }}
-          PORTAL_DEBUG: ${{ github.event.inputs.portal_debug == 'true' && 'yes' || '' }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           YAHOO_EMAIL_1: ${{ secrets.YAHOO_EMAIL_1 }}
           YAHOO_APP_PASSWORD_1: ${{ secrets.YAHOO_APP_PASSWORD_1 }}
           YAHOO_EMAIL_2: ${{ secrets.YAHOO_EMAIL_2 }}
           YAHOO_APP_PASSWORD_2: ${{ secrets.YAHOO_APP_PASSWORD_2 }}
       - name: Put the sealed export on the vault branch
-        if: ${{ github.event.inputs.export == 'true' }}
+        if: ${{ github.event.inputs.mode == 'export' }}
         run: |
           mkdir /tmp/v && cp export.sealed.json /tmp/v/
           cd /tmp/v && git init -q -b vault && git add export.sealed.json

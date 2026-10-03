@@ -454,6 +454,12 @@ details.more summary{cursor:pointer;font-weight:600;display:flex;gap:8px;align-i
   main{padding-bottom:calc(88px + env(safe-area-inset-bottom,0px))}
   .toast{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
 }
+.alert.check{border-left-color:var(--s-available, #d9a400)}
+.chk{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:flex-start;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line, #e5e5e5)}
+.chk:first-child{border-top:0}
+.chk-what{flex:1 1 260px;min-width:0;overflow-wrap:anywhere}
+.chk-btns{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.fsel{max-width:260px;font-size:13px;padding:4px 6px}
 </style>
 </head>
 <body>
@@ -648,7 +654,8 @@ async function cycleDay(id, i){
   delete e.done;
   if (next) e.state = next; else delete e.state;
   try {
-    await S.db.collection("calls").doc(id).update({dates, updatedAt: new Date().toISOString()});
+    // kept as YOUR change: the robot never overwrites it
+    await S.db.collection("calls").doc(id).update({dates, ["mine.days." + e.d + ".state"]: next || "", needsDerive: true, updatedAt: new Date().toISOString()});
     toast(`${nameOf(c)} · ${fmtShort(e.d)}: ${CYCLE_WORDS[next]}`);
   } catch (err) { writeFailed(err); }
 }
@@ -707,8 +714,9 @@ function alertsHTML(idx){
   // "check details" only for live jobs (still open, with days ahead or no dates yet, from the last 3 weeks)
   const live = c => ACTIVE.has(c.status) && (!(c.dates||[]).length || (c.dates||[]).some(e => e.d >= TODAY)) && (!c.received || c.received >= addDays(TODAY, -21));
   const rev = callList().filter(c => c.review && live(c)).sort((a,b) => (b.received||"").localeCompare(a.received||""));
-  if (!pend.length && !cl.length && !rev.length) return "";
-  let h = `<div class="alerts">`;
+  const chk = checkHTML();
+  if (!pend.length && !cl.length && !rev.length && !chk) return "";
+  let h = `<div class="alerts">` + chk;
   if (rev.length) h += `<section class="alert" style="border-left-color:var(--accent)"><h3>From your email · check details · ${rev.length}</h3><ul>${rev.slice(0,6).map(c =>
       `<li><button data-open="${c.id}">${esc(nameOf(c))}</button><span class="when">${esc(c.agency||"")}${c.reviewReason ? " · "+esc(c.reviewReason) : ""}</span></li>`).join("")}</ul></section>`;
   if (pend.length) h += `<section class="alert reply"><h3>Waiting for your reply · ${pend.length}</h3><ul>${pend.slice(0,6).map(c => {
@@ -1363,7 +1371,13 @@ function emailsHTML(d){
   const list = (d.emails||[]).slice().sort((a,b) => String(b.date||"").localeCompare(String(a.date||"")));
   if (!list.length) return d.rawEmail ? `<details class="more"><summary>Original email</summary><pre class="raw">${esc(d.rawEmail)}</pre></details>` : "";
   return `<details class="more"><summary>Emails about this job <span class="src">${list.length} · tap one to read it</span></summary><div class="mails">${list.map(m =>
-    `<details><summary><span class="k">${esc(MAIL_KIND[m.kind]||m.kind||"Email")}</span>${m.date?esc(fmtDay(m.date))+" · ":""}${esc(m.subject||"")}</summary><pre class="raw">${esc(m.text||"")}</pre></details>`).join("")}</div></details>`;
+    `<details><summary><span class="k">${esc(MAIL_KIND[m.kind]||m.kind||"Email")}</span>${m.date?esc(fmtDay(m.date))+" · ":""}${esc(m.subject||"")}</summary>${moveHTML(m, d)}<pre class="raw">${esc(m.text||"")}</pre></details>`).join("")}</div></details>`;
+}
+/* an email on the wrong job: move it (the robot moves it and works out both jobs again) */
+function moveHTML(m, d){
+  if (!m.key || String(m.key).startsWith("raw:") || !draftId || !S.canWrite) return "";
+  const others = jobChoices(d.agency, []).filter(c => c.id !== draftId);
+  return `<div class="fixrow"><select class="inp fsel" data-filesel="${esc(m.key)}" aria-label="Move this email"><option value="">Wrong job? Move this email to…</option>${others.map(c => `<option value="${c.id}">${esc(jobLabel(c))}</option>`).join("")}<option value="new">A new job</option><option value="ignore">Not about a job</option></select></div>`;
 }
 function closeSheet(){ layer.innerHTML = ""; draft = null; draftId = null; payId = null; }
 function drawEditor(){
@@ -1438,33 +1452,74 @@ function ukClock(iso){
   return new Date(iso).toLocaleTimeString("en-GB", {timeZone:"Europe/London", hour:"2-digit", minute:"2-digit", hourCycle:"h23"});
 }
 
-/* ---------- undo a robot change ---------- */
-/* the robot keeps a short history on each job: what it changed, and the values from before */
+/* ---------- your own changes on this job (they always win over emails) ---------- */
 function robotHTML(d){
-  const hist = Array.isArray(d.history) ? d.history : [];
-  if (!hist.length) return "";
-  const last = hist[hist.length - 1];
-  const older = hist.slice(0, -1).reverse().slice(0, 5);   // newest first, up to 5
+  const m = d.mine || {};
+  const parts = [];
+  if (m.status) parts.push("status");
+  ["project", "agency", "role", "location", "fitLocation", "filmLocation", "rate", "respondBy", "received"].forEach(k => { if (m[k] !== undefined) parts.push({project:"name", fitLocation:"fitting place", filmLocation:"filming place", respondBy:"reply by"}[k] || k); });
+  const nd = Object.keys(m.days || {}).length;
+  if (nd) parts.push(`${nd} day${nd === 1 ? "" : "s"}`);
+  if (!parts.length) return "";
   return `<section class="robot">
-    <div class="last"><span>Last robot change: <b>${esc(last.what || "change")}</b> · ${esc(ukWhen(last.at))}</span>
-      ${last.before ? `<button class="btn small" data-undo ${S.canWrite ? "" : "disabled"}>Undo this change</button>` : ""}</div>
-    ${older.length ? `<div class="src">Earlier robot changes</div><ul>${older.map(h => `<li>${esc(h.what || "change")} · ${esc(ukWhen(h.at))}</li>`).join("")}</ul>` : ""}
+    <div class="last"><span>Your changes on this job: <b>${esc(parts.join(", "))}</b>. New emails never undo them.</span>
+      <button class="btn small" data-undo ${S.canWrite ? "" : "disabled"}>Undo my changes</button></div>
   </section>`;
 }
 async function undoRobot(){
   if (!draftId) return;
-  const raw = (S.raw && S.raw.get(draftId)) || {};
-  const hist = Array.isArray(raw.history) ? raw.history : [];
-  const last = hist[hist.length - 1];
-  if (!last || !last.before) return;
-  // put back only the fields the robot saved from before
-  const change = {history: hist.slice(0, -1), updatedAt: new Date().toISOString()};
-  for (const f of ["status", "dates", "agency", "project"]) if (f in last.before) change[f] = last.before[f];
   try {
-    await S.db.collection("calls").doc(draftId).update(change);
-    toast("Undone");
+    await S.db.collection("calls").doc(draftId).update({mine: {}, needsDerive: true, updatedAt: new Date().toISOString()});
+    toast("Your changes are removed – the job is worked out again from its emails within 5 minutes");
     closeSheet(); render();
   } catch (e) { writeFailed(e); }
+}
+
+/* ---------- the Check list: emails the robot wasn't sure about, and jobs that look like copies ---------- */
+S.checks = []; S.dups = {pairs: [], dismissed: []};
+const KIND_WORD = {call:"Availability check", booked:"Booking", released:"Release", replied:"Your answer", calltime:"Call time"};
+function jobLabel(c){ return `${nameOf(c)} · ${c.agency || "No agency"}${firstDate(c) ? " · " + fmtShort(firstDate(c)) : ""}`; }
+/* jobs to offer for an email: the robot's suggestions first, then this agency's recent jobs */
+function jobChoices(agency, first){
+  const k = agencyKeyOf(agency);
+  const rest = callList().filter(c => !first.includes(c.id) && (!k || agencyKeyOf(c.agency) === k))
+    .sort((a, b) => String(lastDate(b) || b.received || "").localeCompare(String(lastDate(a) || a.received || ""))).slice(0, 25);
+  return first.map(id => S.calls.get(id)).filter(Boolean).concat(rest);
+}
+function checkHTML(){
+  const recs = S.checks.slice().sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  const dismissed = new Set(S.dups.dismissed || []);
+  const pairs = (S.dups.pairs || []).filter(p => !dismissed.has(p)).map(p => p.split("+")).filter(([a, b]) => S.calls.get(a) && S.calls.get(b));
+  if (!recs.length && !pairs.length) return "";
+  let h = `<section class="alert check"><h3>Needs your check · ${recs.length + pairs.length}</h3><p class="src" style="margin:0 0 6px">The robot wasn't sure, so it didn't guess. One tap files it, and the robot remembers the name for next time.</p><ul>`;
+  recs.slice(0, 12).forEach(r => {
+    const p = r.parsed || {};
+    const choices = jobChoices(p.agency, r.candidates || []);
+    h += `<li class="chk"><div class="chk-what"><b>${esc(KIND_WORD[r.kind] || "Email")}</b> · ${esc(p.agency || (r.from && r.from.name) || "")} · ${esc(fmtShort(String(r.at).slice(0, 10)))}
+        <div>${esc(r.subject || "")}</div><span class="src">${esc(r.why || "")}</span></div>
+      <div class="chk-btns">${(r.candidates || []).slice(0, 3).map(id => S.calls.get(id) ? `<button class="btn small" data-file="${esc(r.key)}|${id}">${esc(jobLabel(S.calls.get(id)))}</button>` : "").join("")}
+        <select class="inp fsel" data-filesel="${esc(r.key)}" aria-label="Another job"><option value="">Another job…</option>${choices.map(c => `<option value="${c.id}">${esc(jobLabel(c))}</option>`).join("")}</select>
+        ${r.kind === "call" || r.kind === "booked" ? `<button class="btn small" data-file="${esc(r.key)}|new">New job</button>` : ""}
+        <button class="btn small ghost" data-file="${esc(r.key)}|ignore">Not about a job</button></div></li>`;
+  });
+  pairs.slice(0, 8).forEach(([a, b]) => {
+    h += `<li class="chk"><div class="chk-what"><b>Look like the same job</b><div>${esc(jobLabel(S.calls.get(a)))}<br>${esc(jobLabel(S.calls.get(b)))}</div></div>
+      <div class="chk-btns"><button class="btn small" data-dupmerge="${a}+${b}">Merge them…</button><button class="btn small ghost" data-dupno="${[a, b].sort().join("+")}">Not the same</button></div></li>`;
+  });
+  return h + `</ul></section>`;
+}
+/* file an email on a job (or a new job, or "not about a job"): the robot does it within 5 minutes */
+async function fileEmail(key, target){
+  try {
+    await S.db.collection("records").doc(key).update({userJob: target, state: "check", userAt: new Date().toISOString()});
+    S.checks = S.checks.filter(r => r.key !== key);
+    toast(target === "ignore" ? "Marked as not about a job" : target === "new" ? "A new job will be made from it within 5 minutes" : "Filed – the job updates within 5 minutes");
+    if (!layer.innerHTML) render();
+  } catch (e) { writeFailed(e); }
+}
+async function dismissDup(pair){
+  try { await S.db.collection("meta").doc("duplicates").set({dismissed: firebase.firestore.FieldValue.arrayUnion(pair)}, {merge: true}); toast("OK – they stay separate"); }
+  catch (e) { writeFailed(e); }
 }
 
 /* ---------- fix this job: merge a duplicate, split off days ---------- */
@@ -1546,17 +1601,26 @@ async function mergeJobs(){
   (other.emails || []).forEach(m => { if (!m.key || !emails.some(x => x.key === m.key)) emails.push(m); });
   const answers = [...new Set([...(me.answers || []), ...(other.answers || [])])];
   const notes = [...new Set([me.notes, other.notes].map(n => (n || "").trim()).filter(Boolean))].join(" • ");
-  const out = {...me, status, dates, links, emails, answers, notes, updatedAt: new Date().toISOString()};
+  const now = new Date().toISOString();
+  const out = {status, dates, links, emails, answers, notes, updatedAt: now, needsDerive: true, review: false, reviewReason: ""};
   // fill this job's empty fields from the other job
-  const skip = new Set(["history", "createdAt", "updatedAt", "newInfo", "newInfoText", "review", "reviewReason", "tidied"]);
-  for (const [k, v] of Object.entries(other)) if (!skip.has(k) && isEmpty(out[k]) && !isEmpty(v)) out[k] = v;
-  delete out.tidied;                                  // display-only, never saved
-  // both changes in one go: either both happen or neither does
-  const batch = S.db.batch();
-  out.agencyKey = agencyKeyOf(out.agency);
-  batch.set(S.db.collection("calls").doc(draftId), out);
-  batch.delete(S.db.collection("calls").doc(otherId));
+  for (const k of ["project", "agency", "role", "location", "fitLocation", "filmLocation", "rate", "respondBy", "received", "pay"])
+    if (isEmpty(me[k]) && !isEmpty(other[k])) out[k] = other[k]; else if (!isEmpty(me[k])) out[k] = me[k];
+  out.agencyKey = agencyKeyOf(out.agency || me.agency);
+  // the merged job is saved as it is now; its emails from both jobs stay listed on it
+  out.base = {at: now, status, dates, project: out.project || "", agency: out.agency || "", role: out.role || "", received: out.received || "",
+    location: out.location || "", fitLocation: out.fitLocation || "", filmLocation: out.filmLocation || "", rate: out.rate || "", respondBy: out.respondBy || null, links, answers};
+  out.mine = {};
+  if (other.project && other.project !== out.project) out.names = firebase.firestore.FieldValue.arrayUnion(other.project);
   try {
+    // the other job's emails move here; both changes in one go (either both happen or neither does)
+    const recs = await S.db.collection("records").where("job", "==", otherId).get();
+    if (recs.size) out.records = firebase.firestore.FieldValue.arrayUnion(...recs.docs.map(d => d.id));
+    const batch = S.db.batch();
+    recs.docs.forEach(d => batch.update(d.ref, {job: draftId}));
+    batch.update(S.db.collection("calls").doc(draftId), out);
+    batch.delete(S.db.collection("calls").doc(otherId));
+    batch.set(S.db.collection("meta").doc("duplicates"), {dismissed: firebase.firestore.FieldValue.arrayUnion([draftId, otherId].sort().join("+"))}, {merge: true});
     await batch.commit();
     toast(`Merged “${nameOf(other)}” into this job`);
     closeSheet(); render();
@@ -1575,14 +1639,17 @@ async function splitJob(){
   const moved = draft.dates.filter((e, i) => ticked.has(i));
   const kept = draft.dates.filter((e, i) => !ticked.has(i));
   const newId = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const snap = (j, ds) => ({at: now, status: j.status, dates: ds, project: j.project || "", agency: j.agency || "", role: j.role || "", received: j.received || TODAY,
+    location: j.location || "", fitLocation: j.fitLocation || "", filmLocation: j.filmLocation || "", rate: j.rate || "", respondBy: j.respondBy || null});
   const newJob = {...blankCall(), project: draft.project, role: draft.role || "", status: draft.status, agency, dates: moved,
     location: draft.location || "", fitLocation: draft.fitLocation || "", filmLocation: draft.filmLocation || "", rate: draft.rate || "",
-    received: draft.received || TODAY, source: "split", notes: `Split off from the ${draft.agency || "other"} job`, createdAt: now, updatedAt: now};
-  const body = {...draft, dates: kept, updatedAt: now};
-  delete body.tidied;                                 // display-only, never saved
+    received: draft.received || TODAY, source: "split", notes: `Split off from the ${draft.agency || "other"} job`, createdAt: now, updatedAt: now,
+    agencyKey: agencyKeyOf(agency), mine: {}, names: [], records: []};
+  newJob.base = snap(newJob, moved);
+  // this job keeps the other days, saved as they are now (its emails stay on it; move one with "Move this email")
+  const body = {dates: kept, base: snap(draft, kept), mine: {}, needsDerive: true, updatedAt: now};
   const batch = S.db.batch();
-  body.agencyKey = agencyKeyOf(body.agency); newJob.agencyKey = agencyKeyOf(newJob.agency);
-  batch.set(S.db.collection("calls").doc(draftId), body);
+  batch.update(S.db.collection("calls").doc(draftId), body);
   batch.set(S.db.collection("calls").doc(newId), newJob);
   try {
     await batch.commit();
@@ -1664,25 +1731,57 @@ function pullForm(){
     return o;
   });
 }
+/* the fields of one day that you can change in the editor */
+const dayView = e => ({kind: e.kind || "film", state: e.state || (e.done ? "worked" : ""), callTime: e.callTime || "", loc: e.loc || "", callPlace: e.callPlace || "", night: !!e.night});
+/* fields the robot also fills from emails: what you type wins from now on (saved under "mine") */
+const MINE_FIELDS = ["project", "agency", "role", "location", "fitLocation", "filmLocation", "rate", "respondBy", "received", "status"];
 async function saveDraft(){
   pullForm();
   if (!draft.project){ toast("Add the production name first"); $("#f-project", layer)?.focus(); return; }
   draft.dates = draft.dates.filter(e => /^\d{4}-\d\d-\d\d$/.test(e.d)).sort((a,b)=>a.d.localeCompare(b.d));
-  const body = {...draft, review: false, reviewReason: "", updatedAt: new Date().toISOString()};
-  body.agencyKey = agencyKeyOf(body.agency);
-  delete body.tidied;                               // display-only, never saved
-  if (!draftId) body.createdAt = body.updatedAt;
-  const id = draftId || ("c" + Date.now().toString(36) + Math.random().toString(36).slice(2,6));
+  const now = new Date().toISOString();
   try {
-    await S.db.collection("calls").doc(id).set(body);
-    toast(draftId ? "Saved" : "Added to your schedule");
-    closeSheet();
+    if (!draftId){
+      // a job you add yourself: saved as it is ("base"), emails about it later add to it
+      const body = {...draft, review: false, reviewReason: "", createdAt: now, updatedAt: now, agencyKey: agencyKeyOf(draft.agency), mine: {}, names: [], records: [],
+        base: {at: now, status: draft.status, dates: draft.dates, project: draft.project, agency: draft.agency, role: draft.role || "", received: draft.received || TODAY,
+               location: draft.location || "", fitLocation: draft.fitLocation || "", filmLocation: draft.filmLocation || "", rate: draft.rate || "", respondBy: draft.respondBy || null}};
+      delete body.tidied;
+      const id = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+      await S.db.collection("calls").doc(id).set(body);
+      toast("Added to your schedule"); closeSheet(); return;
+    }
+    // an existing job: write ONLY what you changed (so nothing the robot added meanwhile is wiped)
+    const old = (S.raw && S.raw.get(draftId)) || {};
+    const ch = {updatedAt: now, review: false, reviewReason: "", needsDerive: true};
+    const same = (a, b) => String(a ?? "") === String(b ?? "");
+    if (!same(draft.notes, old.notes)) ch.notes = draft.notes || "";
+    if (!!draft.attention !== !!old.attention) ch.attention = !!draft.attention;
+    MINE_FIELDS.forEach(k => { if (!same(draft[k], old[k])) { ch[k] = draft[k] ?? null; ch["mine." + k] = draft[k] ?? null; } });
+    if ("agency" in ch) ch.agencyKey = agencyKeyOf(draft.agency);
+    const before = new Map((old.dates || []).map(e => [e.d, e])), after = new Map(draft.dates.map(e => [e.d, e]));
+    let days = 0;
+    before.forEach((e, d) => { if (!after.has(d)){ ch["mine.days." + d] = {removed: true}; days++; } });
+    after.forEach((e, d) => { const o = before.get(d); if (!o || JSON.stringify(dayView(o)) !== JSON.stringify(dayView(e))){ ch["mine.days." + d] = dayView(e); days++; } });
+    if (days) ch.dates = draft.dates;
+    await S.db.collection("calls").doc(draftId).update(ch);
+    toast("Saved"); closeSheet();
   } catch (e) { writeFailed(e); }
 }
 async function setStatus(id, st){
   const c = S.calls.get(id); if (!c) return;
-  try { await S.db.collection("calls").doc(id).update({status: st, updatedAt: new Date().toISOString()}); toast(`${nameOf(c)}: ${SMAP[st]?.short || st}`); }
+  try { await S.db.collection("calls").doc(id).update({status: st, "mine.status": st, needsDerive: true, updatedAt: new Date().toISOString()}); toast(`${nameOf(c)}: ${SMAP[st]?.short || st}`); }
   catch (e) { writeFailed(e); }
+}
+async function deleteJob(id){
+  try {
+    const recs = await S.db.collection("records").where("job", "==", id).get();
+    const batch = S.db.batch();
+    recs.docs.forEach(d => batch.update(d.ref, {job: null, state: "ignored", why: "You deleted its job"}));
+    batch.delete(S.db.collection("calls").doc(id));
+    await batch.commit();
+    toast("Deleted"); closeSheet();
+  } catch (e) { writeFailed(e); }
 }
 function writeFailed(e){
   if (e && e.code === "permission-denied"){ toast("This account can't change the schedule"); return; }
@@ -1803,8 +1902,11 @@ document.addEventListener("click", e => {
   if ("save" in ds){ saveDraft(); return; }
   if ("del" in ds){ pullForm(); confirmDel = true; drawEditor(); return; }
   if ("delno" in ds){ pullForm(); confirmDel = false; drawEditor(); return; }
-  if ("delyes" in ds){ S.db.collection("calls").doc(draftId).delete().then(() => { toast("Deleted"); closeSheet(); }, writeFailed); return; }
+  if ("delyes" in ds){ deleteJob(draftId); return; }
   if ("undo" in ds){ undoRobot(); return; }
+  if (ds.file){ const [k, target] = ds.file.split("|"); fileEmail(k, target); return; }
+  if (ds.dupno){ dismissDup(ds.dupno); return; }
+  if (ds.dupmerge){ const [a, b] = ds.dupmerge.split("+"); openEditor(a); mergeWith = b; fixOpen = true; drawEditor(); return; }
   // fix this job: merge (pick → confirm) and split off days
   if ("mergeask" in ds && draft){ const pick = $("#mg-sel", layer)?.value; pullForm(); mergeWith = pick || null; fixOpen = true; drawEditor(); return; }
   if ("mergeno" in ds && draft){ pullForm(); mergeWith = null; fixOpen = true; drawEditor(); return; }
@@ -1835,6 +1937,7 @@ document.addEventListener("change", e => {
   if (e.target.id === "statusSel"){ S.listStatus = e.target.value; save("listStatus", S.listStatus); renderCalls(); }
   if (e.target.id === "agencySel"){ S.agency = e.target.value; renderCalls(); }
   if (e.target.id === "sortSel"){ S.sort = e.target.value; save("sort", S.sort); renderCalls(); }
+  if (e.target.dataset && e.target.dataset.filesel && e.target.value){ fileEmail(e.target.dataset.filesel, e.target.value); if (draft) closeSheet(); }
 });
 // remember whether "Fix this job" is open, so it stays open when the editor redraws
 document.addEventListener("toggle", e => { if (e.target.id === "fixbox") fixOpen = e.target.open; }, true);
@@ -1945,6 +2048,10 @@ function showLogin(msg){
     // robot health: a slim line next to the sync badge (errors are ignored)
     if (healthUnsub) healthUnsub();
     healthUnsub = db.collection("meta").doc("health").onSnapshot(d => { S.health = d.exists ? d.data() : null; showHealth(); }, () => { S.health = null; showHealth(); });
+    // the Check list: emails the robot wasn't sure about, and jobs that look like copies
+    const redraw = () => { if (S.loaded && !(layer.innerHTML && (draft || payId))) render(); };
+    db.collection("records").where("state", "==", "check").onSnapshot(sn => { S.checks = sn.docs.map(d => d.data()).filter(r => !r.userJob); redraw(); }, () => {});
+    db.collection("meta").doc("duplicates").onSnapshot(d => { S.dups = d.exists ? d.data() : {pairs: [], dismissed: []}; redraw(); }, () => {});
     let firstSnap = true, lastFromCache = null;
     unsub = db.collection("calls").onSnapshot({includeMetadataChanges: true}, snap => {
       // skip events where only Firebase's own flags changed (nothing in your calls, still online/offline as before)

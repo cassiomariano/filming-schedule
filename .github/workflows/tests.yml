@@ -1,0 +1,24 @@
+# Test gate: every change to the robot or the app runs the replay tests, and shows a red ✗ on the
+# commit when a known case breaks. The robot also runs the same tests before each run (check-email.yml)
+# and refuses to work with rules that fail them.
+name: Tests
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --omit=dev
+      - name: Parser and replay tests (made-up emails)
+        run: npm test
+      - name: Replay of your real emails (sealed; only the robot's key can open them)
+        if: ${{ hashFiles('tests/real.sealed.json') != '' }}
+        run: node tests/test-real.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}

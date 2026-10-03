@@ -134,14 +134,23 @@ GitHub's own timer is unreliable: it often runs late or skips. A free online tim
 
 ## Good to know
 
-- **Calls added from email** start as **New** and appear under **"From your email · check details"** when something was missing. Missing items might be the production name or dates, which happens with "view ASAP" emails whose details are only behind the agency's Respond link. They also appear there when it looks like a call you already have. Open the call, fix the details using the original email shown at the bottom, and save.
-- **Re-read everything:** Actions → Check email → Run workflow, tick **"Re-read everything"** and type `120` days. The robot reads every folder, oldest email first, and works out each job's status again: request → your answer → booking or release → call time. It sends no phone alerts and takes about 10 minutes.
-- **Robot status:** the chip in the app's header says when the robot last checked (green under 15 minutes). Every morning after 08:00 your phone gets yesterday's summary.
-- **Backups:** every Sunday the robot saves a sealed copy of all your jobs on the `backups` branch (the last 8 are kept). To make one now: Actions → Check email → Run workflow → tick **"Make a sealed backup now"**. To restore one, type its date (e.g. `2026-10-04`) in **"Restore a backup"**. This replaces your jobs with that copy.
-- **Money:** the Money tab lists every day you worked with the rate and what has been paid. Tap a job to add its day rate or a payment, and use **Export CSV** for your tax records.
-- **Free database limits:** Firebase's free plan allows 50,000 reads a day. The robot only looks up the sending agency's jobs, so normal use stays far below that. Avoid running "Re-read everything" more than once a day.
-- **Checking the robot:** open **Actions → Check email**, then the latest run. The notes at the top say how many emails it looked at and how many calls it added, or what went wrong.
+- **How the robot works:** every agency email is saved as a record, with what the robot decided and why. Each job is worked out from all of its emails plus your own changes, so the same emails always give the same result. The rules live in `core.js` (matching and jobs) and `parser.js` (reading an email).
+- **Check list:** when the robot isn't sure which job an email belongs to, it doesn't guess. The email appears under **Needs your check** at the top of the Calendar. One tap files it, and the robot remembers the name next time. Jobs that look like copies of each other are offered there too (**Merge them…** / **Not the same**).
+- **Your changes always win:** a day you tap, a status you pick or a detail you edit is saved as *your change*. Later emails never undo it. **Undo my changes** on a job removes them, and the job is worked out again from its emails.
+- **Email on the wrong job?** Open the job → *Emails about this job* → open the email → **Move this email to…**.
+- **Self-check:** once a day (after 08:00) the robot re-reads the last 7 days of mail and adds anything missing. It also rebuilds every job from scratch to confirm nothing drifted. The result is in your morning phone summary.
+- **Run modes** (Actions → Check email → Run workflow → *mode*):
+  - `normal`: read new mail.
+  - `rescan`: read the last N days again (only missing emails are added).
+  - `rederive`: rebuild every job from its emails.
+  - `test_alert`: send a test phone alert.
+  - `export`: make a sealed private copy.
+  - `backup` / `restore`: make or restore a sealed backup.
+- **Tests:** `npm test` runs the parser tests and the replay tests (sequences of emails and the job they must give). The robot runs them before every check and refuses to work with rules that fail. A sealed replay of your real emails (`tests/real.sealed.json`) also runs on every change.
+- **Robot status:** the chip in the app's header says when the robot last checked (green: under 15 minutes).
+- **Backups:** every Sunday the robot saves a sealed copy of all your jobs and email records on the `backups` branch (the last 8 are kept).
+- **Money:** the Money tab lists every day you worked with the rate and what has been paid. Use **Export CSV** for your tax records.
+- **Free database limits:** the robot reads one small index per run instead of your whole schedule, so normal use stays far below Firebase's 50,000 free reads a day.
 - **If the robot stops:** GitHub pauses scheduled robots in repositories with no activity for 60 days. You'll get an email; open **Actions → Check email → Enable workflow**.
-- **Teaching it a new agency format:** the rules live in `parser.js`. Copies of real emails for testing live in `tests/emails.json`. Run `npm test` to check them.
 - **Costs:** Firebase's free plan and GitHub Actions for public repositories are both free at this size.
-- **Privacy:** the code is public, but your calls are not. They live in your Firebase database, which only your login can open. The robot's logs show only counts, never email contents.
+- **Privacy:** the code is public, but your jobs and emails are not. They live in your Firebase database, which only your login can open. The robot's logs show only counts, never email contents.
