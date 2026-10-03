@@ -517,8 +517,8 @@ details.more summary{cursor:pointer;font-weight:600;display:flex;gap:8px;align-i
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js"></script>
-<script src="parser.js?v=8"></script>
-<script src="money.js?v=8"></script>
+<script src="parser.js?v=9"></script>
+<script src="money.js?v=9"></script>
 <script>
 (() => {
 "use strict";
@@ -1203,7 +1203,7 @@ function rateGuess(text){
   return m ? Number(m[1]) : null;
 }
 const OVERDUE_DAYS = 45;
-const PAY_CHIP = {paid:["Paid","s-confirmed"], part:["Part paid","s-available"], invoiced:["Invoiced","s-available"], unpaid:["Unpaid","s-canceled"], overdue:["Overdue","pay-over"]};
+const PAY_CHIP = {paid:["Paid","s-confirmed"], part:["Part paid","s-available"], invoiced:["Invoiced","s-available"], unpaid:["Unpaid","s-canceled"], overdue:["No payment added","pay-over"]};
 /* UK tax year: 6 April to 5 April. Gives {from, to, label} for the year that holds day k */
 function taxYear(k){
   const y = Number(k.slice(0, 4));
@@ -1264,7 +1264,9 @@ function moneyJobs(){
     const expected = fees ? Money.expectedNet(gross, fees).net : gross;    // what should reach your bank
     // checks worked out now (a later payment pays the days an earlier one didn't)
     const live = all.map(x => x.kind === "manual" ? x : {...x, checks: Money.checkPayment(x, fees, worked, rate, paidDaysBut(all, x))});
-    const bad = live.some(x => (x.checks || []).some(k => !k.ok));
+    const bad = live.some(x => (x.checks || []).some(isAlert));
+    // days a payment covers that the schedule doesn't show as worked (you can mark them with one tap)
+    const notWorked = [...new Set(live.flatMap(x => (x.checks || []).filter(k => k.kind === "notWorked").flatMap(k => k.days || [])))].sort();
     const last = worked[worked.length - 1];
     const ago = Math.round((parse(TODAY) - parse(last)) / 864e5);
     let status = "unpaid";
@@ -1272,7 +1274,7 @@ function moneyJobs(){
     else if (paid > 0) status = "part";
     else if (invoices.length) status = "invoiced";
     else if (ago > OVERDUE_DAYS) status = "overdue";
-    jobs.push({c, worked, last, rate, estimate: guess !== null, extras, paid, paidOn, note: p.note || "", gross, fees, expected, status, bad, payments: live,
+    jobs.push({c, worked, last, rate, estimate: guess !== null, extras, paid, paidOn, note: p.note || "", gross, fees, expected, status, bad, notWorked, payments: live,
       owed: status === "paid" ? 0 : Math.max(0, expected - paid)});
   }
   return jobs.sort((a, b) => b.last.localeCompare(a.last) || nameOf(a.c).localeCompare(nameOf(b.c)));
@@ -1398,6 +1400,11 @@ function openPay(id){
     <footer><button class="btn primary" data-paysave ${S.canWrite ? "" : "disabled"}>Save</button><button class="btn ghost" data-close>Cancel</button></footer>
   </aside>`;
 }
+/* a check line: ✓ right, ⓘ a note, · waiting for payment, ⚠ needs a look */
+const isAlert = k => !k.ok && k.kind !== "unpaid";
+function checksHTML(list, fix = s => s){
+  return list.length ? `<ul class="checks">${list.map(k => `<li class="${isAlert(k) ? "bad" : "ok"}">${k.note ? "ⓘ" : k.ok ? "✓" : k.kind === "unpaid" ? "·" : "⚠"} ${esc(fix(k.what))}</li>`).join("")}</ul>` : "";
+}
 /* one saved payment or invoice, with its day-by-day breakdown and its checks */
 const KIND_WORD2 = {invoice: "Invoice", manual: "Marked paid", pending: "Approved – not deposited yet", remittance: "Payment"};
 function breakdownHTML(x){
@@ -1416,7 +1423,7 @@ function payHTML(x, removable = true){
     <div class="payamts">${amt(x.gross, "Gross")}${fees}${amt(x.vat, "VAT")}${x.ni ? amt(x.ni, "NI") : ""}${(x.extras || []).map(o => amt(o.amount, esc(o.what || "Other") + (o.amount > 0 ? " (added)" : ""))).join("")}${amt(x.net, x.kind === "invoice" ? "Total" : "Net")}</div>
     ${(x.days || []).length ? `<div class="src">Days: ${esc(x.days.map(fmtDay).join(", "))}${x.hours ? ` · ${x.hours} hours` : ""}</div>` : ""}
     ${breakdownHTML(x)}
-    ${(x.checks || []).length ? `<ul class="checks">${x.checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what)}</li>`).join("")}</ul>` : ""}
+    ${checksHTML(x.checks || [])}
     ${x.text ? `<details><summary class="src">What you pasted</summary><pre class="raw">${esc(x.text)}</pre></details>` : ""}</div>`;
 }
 /* fill "amount paid" with the expected total and "paid on" with today */
@@ -1469,9 +1476,24 @@ function renderDone(){
       <div class="ddays">${j.worked.map(d => `<span class="chip s-done">${esc(fmtDay(d))}</span>`).join("")}</div>
       <div class="dnums"><span>Expected ${j.gross ? `<b>${money(j.expected)}</b>${j.fees ? ` <small>(gross ${money(j.gross)})</small>` : ""}` : `<b>–</b> <small>add the day rate in Details, or paste the remittance</small>`}</span><span>Paid <b>${money(j.paid)}</b>${j.paidOn ? ` <small>on ${esc(fmtDM(j.paidOn))}</small>` : ""}</span>
         <small class="src">${esc(feesText(j.fees))}${j.rate === null ? " · no day rate yet" : ""}</small></div>
-      <div class="dbtns">${j.status !== "paid" ? `<button class="btn small" data-markpaid="${j.c.id}">✓ Mark paid</button>` : ""}<button class="btn small" data-remit="${j.c.id}">Add payment</button><button class="btn small ghost" data-pay="${j.c.id}">Details${j.payments.length ? ` · ${j.payments.length} payment${j.payments.length === 1 ? "" : "s"}` : ""}</button></div>
+      ${j.notWorked.length ? `<p class="src" style="margin:0;color:var(--attn)">⚠ Paid for ${j.notWorked.length} day${j.notWorked.length === 1 ? "" : "s"} not marked worked: ${esc(j.notWorked.map(fmtDay).join(", "))}</p>` : ""}
+      <div class="dbtns">${j.notWorked.length ? `<button class="btn small" data-markworked="${j.c.id}">Mark ${j.notWorked.length === 1 ? "that day" : "those days"} worked</button>` : ""}${j.status !== "paid" ? `<button class="btn small" data-markpaid="${j.c.id}">✓ Mark paid</button>` : ""}<button class="btn small" data-remit="${j.c.id}">Add payment</button><button class="btn small ghost" data-pay="${j.c.id}">Details${j.payments.length ? ` · ${j.payments.length} payment${j.payments.length === 1 ? "" : "s"}` : ""}</button></div>
     </section>`;}).join("")}</div>`;
   main.innerHTML = h;
+}
+/* you tap it: the days the payments prove are marked worked (blue), as your own change */
+async function markWorked(id){
+  const j = moneyJobs().find(x => x.c.id === id); if (!j || !j.notWorked.length) return;
+  if (!confirm(`Mark ${j.notWorked.map(fmtDay).join(", ")} as worked in ${nameOf(j.c)}?`)) return;
+  const now = new Date().toISOString(), dates = (j.c.dates || []).map(e => ({...e})), ch = {needsDerive: true, updatedAt: now};
+  j.notWorked.forEach(d => {
+    const e = dates.find(y => y.d === d);
+    if (e){ delete e.done; e.state = "worked"; } else dates.push({d, kind: "film", state: "worked"});
+    ch["mine.days." + d + ".state"] = "worked"; ch["mine.days." + d + ".at"] = now;
+  });
+  ch.dates = dates.sort((a, b) => a.d.localeCompare(b.d));
+  try { await S.db.collection("calls").doc(id).update(ch); toast(`${nameOf(j.c)}: ${j.notWorked.length} day${j.notWorked.length === 1 ? "" : "s"} marked worked`); }
+  catch (e) { writeFailed(e); }
 }
 /* quick: the rest of the expected amount, paid today */
 async function markPaid(id){
@@ -1541,7 +1563,7 @@ function drawRemit(){
         ${editable ? `<div class="three">${inp("gross", "Gross £")}${inp("commission", "Commission £")}${inp("ep", "EP fee £")}</div><div class="three">${inp("vat", "VAT £")}${inp("net", p.status === "invoice" ? "Total £" : "Net paid £")}<div class="fld"><label for="rm-on-${i}">${p.status === "invoice" ? "Sent on" : "Paid on"}</label><input class="inp" type="date" id="rm-on-${i}" value="${esc(p.paidOn || TODAY)}"></div></div>${(p.extras || []).length ? `<p class="src" style="margin:0">Also on it: ${p.extras.map(o => `${esc(o.what)} ${o.amount > 0 ? "+" : "−"}${money(Math.abs(o.amount))}`).join(", ")}</p>` : ""}`
           : payHTML({...p, kind: p.status === "pending" ? "pending" : "remittance", checks: []}, false)}
         <div class="fld"><label for="rm-job-${i}">For the job</label><select class="inp" id="rm-job-${i}" data-rmjob="${i}">${opts(p.target)}</select></div>
-        ${checks.length ? `<ul class="checks">${checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what.replace("Paid days not marked worked:", "Paid for days not marked worked in this job – check it's the right job:"))}</li>`).join("")}</ul>` : ""}
+        ${checksHTML(checks, w => w.replace("Paid days not marked worked:", "Paid for days not marked worked in this job – check it's the right job:"))}
       </section>`;
     }).join("");
   }
@@ -1670,7 +1692,7 @@ function exportMoneyCSV(){
     const split = x.commission != null || x.ep != null;
     rows.push([x.paidOn ? taxYear(x.paidOn).label : "", x.paidOn || "", nameOf(j.c), j.c.agency || x.agency || "", (x.days && x.days.length ? x.days : j.worked).join(" "),
       x.gross ?? "", split ? (x.commission ?? "") : "", split ? (x.ep ?? "") : "", split ? "" : (x.fees ?? ""), x.vat ?? "", x.net ?? "", x.invoiceNo || "",
-      (x.checks || []).some(k => !k.ok) ? "CHECK: " + x.checks.filter(k => !k.ok).map(k => k.what).join("; ") : (x.checks || []).length ? "ok" : ""]);
+      (x.checks || []).some(isAlert) ? "CHECK: " + x.checks.filter(isAlert).map(k => k.what).join("; ") : (x.checks || []).length ? "ok" : ""]);
   });
   rows.push([]); rows.push(["Not paid yet"]); rows.push(["Production","Agency","Days worked","Expected (net)","Paid so far","Status"]);
   moneyJobs().filter(j => j.owed > 0).forEach(j => rows.push([nameOf(j.c), j.c.agency || "", j.worked.join(" "), j.expected.toFixed(2), j.paid.toFixed(2), PAY_CHIP[j.status][0]]));
@@ -2276,6 +2298,7 @@ document.addEventListener("click", e => {
   if (ds.moneyyear){ S.moneyYear = ds.moneyyear; save("moneyYear", S.moneyYear); render(); return; }
   if (ds.donef){ S.doneFilter = ds.donef; save("doneFilter", S.doneFilter); render(); return; }
   if (ds.markpaid){ markPaid(ds.markpaid); return; }
+  if (ds.markworked){ markWorked(ds.markworked); return; }
   if (ds.remit !== undefined){ openRemit(ds.remit); return; }
   if ("remitread" in ds){ readRemitNow(); return; }
   if ("remitsave" in ds){ saveRemit(); return; }

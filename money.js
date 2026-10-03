@@ -192,7 +192,8 @@
       while ((n = nre.exec(l))) {
         if (n.index < ds[0].end) continue;
         var end = n.index + n[0].length, best = null;
-        cols.forEach(function (c, k) { var dist = Math.abs(c.end - end); if (!best || dist < best.dist) best = { k: k, dist: dist }; });
+        cols.forEach(function (c, k) { if (c.used === j) return; var dist = Math.abs(c.end - end); if (!best || dist < best.dist) best = { k: k, dist: dist }; });
+        if (best) cols[best.k].used = j;
         if (best) { var key = cols[best.k].name + (cols.slice(0, best.k).filter(function (c) { return c.name === cols[best.k].name; }).length ? "#2" : ""); row.cells[key] = Number(n[0].replace(/,/g, "")); }
       }
       rows.push(row);
@@ -375,7 +376,9 @@
     return list;
   }
   // the same agency (or one of them unknown): "Extra People" never goes to a "Casting Collective" job
-  function agencyKey(a) { return String(a || "").toLowerCase().replace(/\b(ltd|limited|casting|extras?|agency|uk|talent|management|the)\b/g, "").replace(/[^a-z0-9]/g, ""); }
+  // the company name on a remittance → the agency name you use ("Another 210 Production" is Two 10 Casting)
+  var AGENCY_ALIASES = { another210production: "two10", another210productions: "two10" };
+  function agencyKey(a) { var k = String(a || "").toLowerCase().replace(/\b(ltd|limited|casting|extras?|agency|uk|talent|management|the)\b/g, "").replace(/[^a-z0-9]/g, ""); return AGENCY_ALIASES[k] || k; }
   function sameAgency(a, b) { var x = agencyKey(a), y = agencyKey(b); return !x || !y || x === y || x.indexOf(y) !== -1 || y.indexOf(x) !== -1; }
   function matchPayment(p, text, jobs) {
     // a payment that names its agency only goes to a job of that agency (never to one with no agency)
@@ -438,8 +441,8 @@
 
   // ---------- is it right? ----------
   // payment = { gross, commission, ep, vat, net, days[] }; fees from the emails; worked = the job's worked days
-  // parts the agency takes no commission on (seen on Extra People remittances: a £15 meal)
-  var NO_COMMISSION = /^(meals?( allowance)?|subsistence|per ?diem)$/i;
+  // parts the agency takes no commission on (seen on remittances: Extra People "Meal", Entertainment Partners "Exp.")
+  var NO_COMMISSION = /^(meals?( allowance)?|subsistence|per ?diem|exp\.?|expenses?|mileage|parking)$/i;
   function noCommission(p) {
     return r2((p.perDay || []).reduce(function (s, x) { return s + Object.keys(x.parts || {}).reduce(function (t, k) { return t + (NO_COMMISSION.test(k.trim()) ? x.parts[k] : 0); }, 0); }, 0));
   }
@@ -452,8 +455,11 @@
     if (p.days && p.days.length && worked) {
       var missing = worked.filter(function (d) { return p.days.indexOf(d) === -1 && other.indexOf(d) === -1; });
       var extra = p.days.filter(function (d) { return worked.indexOf(d) === -1; });
-      out.push(!missing.length && !extra.length ? { ok: true, what: "Pays every day you worked (" + p.days.length + ")" }
-        : { ok: false, what: (missing.length ? "Not paid yet: " + missing.join(", ") : "") + (missing.length && extra.length ? " · " : "") + (extra.length ? "Paid days not marked worked: " + extra.join(", ") : "") });
+      if (!missing.length && !extra.length) out.push({ ok: true, what: "Pays every day you worked (" + p.days.length + ")" });
+      // days still waiting for a payment: the job's status, not a mistake in this payment
+      if (missing.length) out.push({ ok: false, kind: "unpaid", days: missing, what: "Not paid yet: " + missing.join(", ") });
+      // paid for a day the schedule doesn't show as worked: the schedule or the job may be wrong
+      if (extra.length) out.push({ ok: false, kind: "notWorked", days: extra, what: "Paid days not marked worked: " + extra.join(", ") });
     }
     if ((p.gross === null || p.gross === undefined) && p.net !== null && p.net !== undefined && p.source && p.source !== "text" && p.source !== "ep-table")
       out.push({ ok: false, what: "The gross couldn't be read from this remittance – please send me this PDF" });
@@ -479,7 +485,7 @@
       }
       var exp = expectedNet(base, fees);
       exp.net = r2(p.gross - exp.commission - exp.ep - exp.vat - (p.ni || 0) + (p.extras || []).reduce(function (t, o) { return t + o.amount; }, 0));
-      var noFee = base !== p.gross ? " (none on the £" + free.toFixed(2) + " meal)" : "";
+      var noFee = base !== p.gross ? " (none on the £" + free.toFixed(2) + " expenses)" : "";
       var said = { agency: "usual for this agency", remittance: "from an earlier remittance", you: "you typed", said: "the remittance says" }[fees.from] || "the emails say";
       if (p.commission !== null) out.push(near(p.commission, exp.commission) ? { ok: true, what: "Agency commission is " + fees.agency + "%" + noFee } : { ok: false, what: "Agency commission is " + (p.commission / base * 100).toFixed(1) + "% (" + said + " " + fees.agency + "%)" });
       if (p.ep !== null && fees.ep) out.push(near(p.ep, exp.ep) ? { ok: true, what: "EP admin fee is " + fees.ep + "%" + noFee } : { ok: false, what: "EP admin fee is " + (p.ep / base * 100).toFixed(1) + "% (" + said + " " + fees.ep + "%)" });
@@ -492,7 +498,7 @@
     (p.perDay || []).forEach(function (x) {
       if (!Object.keys(x.parts || {}).length) return;      // only the day's total is written
       var parts = Object.keys(x.parts || {}).reduce(function (s, k) { return s + x.parts[k]; }, 0);
-      if (x.total !== null && Math.abs(r2(parts) - x.total) > 0.02) out.push({ ok: false, what: x.d + ": the parts add up to " + r2(parts).toFixed(2) + ", not " + x.total.toFixed(2) });
+      if (x.total !== null && Math.abs(r2(parts) - x.total) > 0.02) out.push({ ok: true, note: true, what: x.d + ": the day's breakdown was only partly read (the day's total " + x.total.toFixed(2) + " is right)" });
     });
     var dayTotals = (p.perDay || []).filter(function (x) { return x.total !== null && x.total !== undefined; });
     if (p.gross !== null && dayTotals.length && dayTotals.length === (p.perDay || []).length) {

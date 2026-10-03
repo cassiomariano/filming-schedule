@@ -118,7 +118,7 @@ const f20 = { agency: 20, ep: 0, vat: 20, plusVat: true, from: "agency" };
 const meal = { gross: 189.58, commission: 34.91, ep: null, vat: 6.98, net: 147.69, days: ["2025-04-03"],
   perDay: [{ d: "2025-04-03", parts: { Meal: 15, Travel: 22.54, "S/F": 22.17, Overtime: 11.14, "Holiday Pay": 11.54, "Basic Fee": 107.19 }, total: 189.58 }] };
 const cm = M.checkPayment(meal, f20, ["2025-04-03"]);
-ok("No commission on the £15 meal: 20% of the rest passes", cm.every(c => c.ok) && cm.some(c => /none on the £15\.00 meal/.test(c.what)), cm);
+ok("No commission on the £15 meal: 20% of the rest passes", cm.every(c => c.ok) && cm.some(c => /none on the £15\.00 expenses/.test(c.what)), cm);
 ok("A real 18% commission is still caught", M.checkPayment({ ...meal, commission: 30.00, vat: 6.00, net: 153.58 }, f20, ["2025-04-03"]).some(c => !c.ok && /commission/.test(c.what)));
 const two = M.checkPayment({ gross: 100, commission: 20, ep: null, vat: 4, net: 76, days: ["2026-08-14"] }, f20, ["2026-08-14", "2026-08-28", "2026-09-07"], null, ["2026-08-28"]);
 ok("Days paid by the job's other payment aren't 'not paid yet'", two.some(c => !c.ok && c.what === "Not paid yet: 2026-09-07"), two);
@@ -148,5 +148,11 @@ const ttX = M.readPayments(ttText.replace(/(\s+Total Paid\s+)£102\.00/, "\n    
 ok("Talent Talks: expenses paid on top (no commission) are found by the sum and kept", ttX.net === 122 && ttX.extras && ttX.extras[0].amount === 20 && M.checkPayment(ttX, null, ttX.days).every(c => c.ok), ttX);
 const pasted = M.readPayments("Remittance\nSubtotal: £130.00\nCommission 12.5%: -£16.25\nVAT on commission: -£3.25\nTravel expenses: £20.00\nTotal Paid: £130.50", [], "x")[0];
 ok("Pasted text: an extra amount is used only when it explains the sum (travel £20 added)", pasted.net === 130.5 && pasted.extras && pasted.extras[0].amount === 20 && M.checkPayment(pasted, null, null).every(c => c.ok), pasted);
+// 11) Nightfall-style EP remittance: 10% + 10% on Basic + O/T, none on "Exp." (made-up figures)
+const exp = { gross: 400.00, commission: 38.00, ep: 38.00, vat: 15.20, net: 308.80, days: ["2026-05-19"], perDay: [{ d: "2026-05-19", parts: { Basic: 200, "O/T": 180, "Exp.": 20 }, total: 400 }] };
+ok("EP: no commission or admin fee on expenses ('Exp.')", M.checkPayment(exp, f1, ["2026-05-19"]).every(c => c.ok), M.checkPayment(exp, f1, ["2026-05-19"]));
+ok("EP names Two 10 Casting 'Another 210 Production': the same agency", M.sameAgency("Another 210 Production", "Two 10 Casting") && !M.sameAgency("Another 210 Production", "Casting Collective"));
+const partial = M.checkPayment({ gross: 100, commission: 20, ep: null, vat: 4, net: 76, days: ["2026-01-01"], perDay: [{ d: "2026-01-01", parts: { Basic: 80 }, total: 100 }] }, f20, null);
+ok("A breakdown read only in part is a note, not an alert", partial.every(c => c.ok) && partial.some(c => c.note), partial);
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
