@@ -633,12 +633,12 @@ function tickedAnswers(text, parse) {
 const portal = { read: 0, failed: 0, login: 0, answered: 0, recorded: 0, radios: 0, ticked: 0, scripts: 0, dated: 0 };
 // every EP message page a job (or an email) links to
 function epLinks(c) {
-  return (c.links || []).filter(x => x.kind === "respond" && /^https:\/\/[a-z0-9.-]*epcastingportal\.com\/./i.test(x.url)).map(x => x.url);
+  return (c.links || []).filter(x => x.kind === "respond" && /^https:\/\/[a-z0-9.-]*epcastingportal\.com\/(m\/)?r\/[a-z0-9-]+/i.test(x.url)).map(x => x.url);
 }
 function sharesPage(a, b) { const s = new Set(epLinks(a)); return epLinks(b).some(u => s.has(u)); }
 function portalLink(c) {
   // the NEWEST EP page (a later request for the same job adds its link at the end)
-  // (a bare "epcastingportal.com" address is the home page, not a message)
+  // (only message pages: not the home page, the login page or a download)
   const eps = epLinks(c);
   return eps.length ? eps[eps.length - 1] : null;
 }
