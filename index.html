@@ -1221,8 +1221,13 @@ function agencyFees(agency){
       const k = agencyKeyOf(c.agency), sig = JSON.stringify(f); const m = count.get(k) || new Map(); m.set(sig, (m.get(sig) || 0) + 1); count.set(k, m); });
     agencyFeesCache = new Map([...count].map(([k, m]) => [k, JSON.parse([...m].sort((a, b) => b[1] - a[1])[0][0])]));
   }
-  return agencyFeesCache.get(agencyKeyOf(agency)) || null;
+  return agencyFeesCache.get(agencyKeyOf(agency)) || KNOWN_FEES.get(agencyKeyOf(agency)) || null;
 }
+/* fees shown on the agencies' own remittances and earnings pages, used when no email states them */
+const KNOWN_FEES = new Map([
+  ["Casting Collective", {agency: 20, ep: 0, vat: 20, plusVat: true}],   // earnings page: commission 20% + VAT on commission
+  ["Talent Talks", {agency: 12.5, ep: 0, vat: 20, plusVat: true}],       // remittance: "TT Commission 12.50%" + VAT (20%)
+].map(([k, f]) => [agencyKeyOf(k), f]));
 function jobFees(c){
   const p = c.pay || {};
   if (p.fees) return {...p.fees, from: "you"};
@@ -1408,7 +1413,7 @@ function payHTML(x, removable = true){
     ? amt(x.commission, "Commission") + amt(x.ep, "EP admin fee") : amt(x.fees, "Fees");
   return `<div class="paybox"><div class="paytop"><b>${esc(KIND_WORD2[x.kind] || "Payment")}</b>${x.paidOn ? `&nbsp;· ${x.kind === "invoice" ? "sent" : x.source === "ep-pdf" && !x.deposited ? "invoice date" : "deposited"} ${esc(fmtDM(x.paidOn))}` : ""}${x.invoiceNo ? `&nbsp;· no. ${esc(x.invoiceNo)}` : ""}
       <span style="flex:1"></span>${removable ? `<button class="btn small ghost" data-paydel="${esc(x.id)}" title="Remove this payment">✕</button>` : ""}</div>
-    <div class="payamts">${amt(x.gross, "Gross")}${fees}${amt(x.vat, "VAT")}${amt(x.net, x.kind === "invoice" ? "Total" : "Net")}</div>
+    <div class="payamts">${amt(x.gross, "Gross")}${fees}${amt(x.vat, "VAT")}${x.ni ? amt(x.ni, "NI") : ""}${amt(x.net, x.kind === "invoice" ? "Total" : "Net")}</div>
     ${(x.days || []).length ? `<div class="src">Days: ${esc(x.days.map(fmtDay).join(", "))}${x.hours ? ` · ${x.hours} hours` : ""}</div>` : ""}
     ${breakdownHTML(x)}
     ${(x.checks || []).length ? `<ul class="checks">${x.checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what)}</li>`).join("")}</ul>` : ""}
@@ -1517,8 +1522,8 @@ function drawRemit(){
   const opts = sel => `<option value="new"${sel === "new" ? " selected" : ""}>➕ Add it as a new worked job</option><option value="skip"${sel === "skip" ? " selected" : ""}>Don't save this one</option>
     ${jobs.map(x => `<option value="${x.id}"${x.id === sel ? " selected" : ""}>${esc(x.name)} · ${esc(x.agency)} · ${esc(fmtDM(x.worked[x.worked.length - 1]))}</option>`).join("")}`;
   const chosen = remit.files.length ? `<p class="src" style="margin:4px 0 0">${remit.files.length} file${remit.files.length === 1 ? "" : "s"} chosen: ${esc(remit.files.map(f => f.name).join(", "))}</p>` : "";
-  let body = `<p class="src" style="margin:0">Best: the remittance PDFs (they give each day's breakdown) and the table from the same payments page (it gives the date the money reached your bank). Nothing personal from them is kept – only the figures.</p>
-    <div class="fld"><span class="lbl">Remittance PDFs (from your EP payments page – several at once is fine)</span>
+  let body = `<p class="src" style="margin:0">Reads remittances from Entertainment Partners (the PDFs and the table on your payments page), Casting Collective and Talent Talks (open the remittance on their website → Print → Save as PDF), or any remittance text. Nothing personal from them is kept – only the figures.</p>
+    <div class="fld"><span class="lbl">Remittance PDFs (several at once is fine)</span>
       <input class="inp" type="file" id="rm-pdf" accept="application/pdf,.pdf" multiple ${remit.busy ? "disabled" : ""}>${chosen}</div>
     <div class="fld"><label for="rm-text">…or paste: the table from your EP payments page (select all its rows and copy), or a remittance / invoice text</label>
       <textarea class="inp" id="rm-text" rows="6" placeholder="Project Name  Status  Remittance Advice  Deposit Date  Days Worked  Gross  Fees  VAT  Deposited…">${esc(remit.text)}</textarea></div>
@@ -1604,7 +1609,7 @@ function pullRemit(){
 }
 /* what a payment keeps: the figures, never the PDF or anything that identifies you */
 function payRecord(p, fees, worked, rate, other){
-  const keep = ["source", "deposited", "project", "agency", "invoiceNo", "paidOn", "taxPoint", "days", "perDay", "hours", "gross", "ep", "epVat", "commission", "commissionVat", "fees", "vat", "net", "text"];
+  const keep = ["source", "deposited", "project", "agency", "invoiceNo", "paidOn", "taxPoint", "days", "perDay", "hours", "gross", "ep", "epVat", "commission", "commissionVat", "fees", "ni", "feesSaid", "vat", "net", "text"];
   const out = {id: "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), kind: p.status === "invoice" ? "invoice" : p.status === "pending" ? "pending" : "remittance", savedAt: new Date().toISOString()};
   keep.forEach(k => { if (p[k] !== undefined) out[k] = p[k]; });
   out.checks = Money.checkPayment(out, fees, worked, rate, other || []);

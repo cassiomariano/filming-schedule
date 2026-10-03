@@ -1,0 +1,34 @@
+      01/01/2026, 10:00                                           Your remittances - Casting Collective Organiser
+      Your remittances
+       Test Person
+         Remittance Date:          12/11/2025
+         Remittance No:            R100001
+         Ref No:                   11111, 11112
+        Production              Work Date              Voucher           Ref           Received              Gross
+        OSPREY                  15/10/2025             PP100001          11111         10/11/2025             300.00
+        OSPREY                  16/10/2025             PP100002          11112         10/11/2025             200.00
+                                                                            Total Due                         500.00
+                                                                            NI                                   0.00
+                                                                            Commission                         100.00
+                                                                            VAT on Commission                   20.00
+                                                                            Net Payment                       380.00
+       Casting Collective encourages all its members to join either the FAA (part of BECTU Union)
+      https://organiser.castingcollective.net/earnings/remittances/100001                                                                   1/1
+=====
+                                                                                                  Talent Talks Limited
+                                                                                                Payment Remittance
+          Name:   Test Person
+          Remittance No:    Heron1234
+          Remittance Date:    17/07/2026
+          Role / Character:  Supporting Artist
+          Date Money Received:     17/07/2026
+                                       Description                                                          Total
+           Reference: Heron (Crowd)                                                                                                 £120.00
+           Shoot Date: 28/05/2026
+                                                         Subtotal:                                                                  £120.00
+                                                         TT Commission 12.50%                                                        -£15.00
+                                                         VAT (20%) on Commission                                                      -£3.00
+                                                         Total Paid                                                                 £102.00
+             When doing your annual tax return, you should be able to deduct any commission, any subscription fees and VAT on both
+             commission and subscription fees as a business expense.
+                                                                                                                                    Page 1/1

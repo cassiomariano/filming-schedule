@@ -128,5 +128,19 @@ ok("A payment from another agency never goes to that job", M.readPayments("Payme
 
 const wrongAg = M.readPayments(require("fs").readFileSync(__dirname + "/fixtures/ep-remittances.txt", "utf8"), [{ id: "o", name: "Kestrel One", agency: "Other Agency", worked: ["2025-03-17"] }], "x");
 ok("Same name and day but another agency: not matched (added as a new job instead)", wrongAg.every(p => p.job === null), wrongAg.map(p => p.job));
+// 10) Casting Collective and Talent Talks remittances, printed from their websites (real layout, made-up names and amounts)
+const [ccText, ttText] = require("fs").readFileSync(__dirname + "/fixtures/agency-remittances.txt", "utf8").split("=====");
+const cc = M.readPayments(ccText, [{ id: "os", name: "Osprey", agency: "Casting Collective", worked: ["2025-10-15", "2025-10-16"] }], "x");
+ok("Casting Collective: one payment, its two days, paid on the remittance date", cc.length === 1 && cc[0].days.join() === "2025-10-15,2025-10-16" && cc[0].paidOn === "2025-11-12" && cc[0].invoiceNo === "R100001", cc);
+ok("Casting Collective: gross 500, commission 100, VAT 20, NI 0, net 380, job found", cc[0].gross === 500 && cc[0].commission === 100 && cc[0].vat === 20 && cc[0].ni === 0 && cc[0].net === 380 && cc[0].job === "os" && cc[0].agency === "Casting Collective", cc[0]);
+ok("Casting Collective: every check passes with 20% + VAT (no breakdown warnings)", M.checkPayment(cc[0], f20, ["2025-10-15", "2025-10-16"]).every(c => c.ok), M.checkPayment(cc[0], f20, ["2025-10-15", "2025-10-16"]));
+ok("Casting Collective: NI taken off is part of the sum", M.checkPayment({ ...cc[0], ni: 10, net: 370 }, f20, null).some(c => c.ok && /sum is right/.test(c.what)));
+const tt = M.readPayments(ttText, [{ id: "he", name: "Heron", agency: "Talent Talks", worked: ["2026-05-28"] }], "x");
+ok("Talent Talks: project, day, remittance no and date", tt.length === 1 && tt[0].project === "Heron (Crowd)" && tt[0].days.join() === "2026-05-28" && tt[0].invoiceNo === "Heron1234" && tt[0].paidOn === "2026-07-17", tt);
+ok("Talent Talks: subtotal 120, commission 15 (12.5%), VAT 3, paid 102, job found", tt[0].gross === 120 && tt[0].commission === 15 && tt[0].vat === 3 && tt[0].net === 102 && tt[0].job === "he" && tt[0].feesSaid.agency === 12.5, tt[0]);
+const ttc = M.checkPayment(tt[0], null, ["2026-05-28"]);
+ok("Talent Talks: checked against the 12.5% written on it when the emails don't say", ttc.every(c => c.ok) && ttc.some(c => /commission is 12\.5%/.test(c.what)), ttc);
+ok("No name from the remittance is kept", JSON.stringify(cc.concat(tt)).indexOf("Test Person") === -1);
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
