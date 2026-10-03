@@ -1519,7 +1519,7 @@ function remitJobs(){ return moneyJobs().map(j => ({id: j.c.id, name: nameOf(j.c
 function drawRemit(){
   const jobs = remitJobs();
   const list = remit.list;
-  const opts = sel => `<option value="new"${sel === "new" ? " selected" : ""}>➕ Add it as a new worked job</option><option value="skip"${sel === "skip" ? " selected" : ""}>Don't save this one</option>
+  const opts = sel => `${sel ? "" : `<option value="" selected>— Choose: one of your jobs, a new job, or don't save —</option>`}<option value="new"${sel === "new" ? " selected" : ""}>➕ Add it as a new worked job</option><option value="skip"${sel === "skip" ? " selected" : ""}>Don't save this one</option>
     ${jobs.map(x => `<option value="${x.id}"${x.id === sel ? " selected" : ""}>${esc(x.name)} · ${esc(x.agency)} · ${esc(fmtDM(x.worked[x.worked.length - 1]))}</option>`).join("")}`;
   const chosen = remit.files.length ? `<p class="src" style="margin:4px 0 0">${remit.files.length} file${remit.files.length === 1 ? "" : "s"} chosen: ${esc(remit.files.map(f => f.name).join(", "))}</p>` : "";
   let body = `<p class="src" style="margin:0">Reads remittances from Entertainment Partners (the PDFs and the table on your payments page), Casting Collective and Talent Talks (open the remittance on their website → Print → Save as PDF), or any remittance text. Nothing personal from them is kept – only the figures.</p>
@@ -1541,7 +1541,7 @@ function drawRemit(){
         ${editable ? `<div class="three">${inp("gross", "Gross £")}${inp("commission", "Commission £")}${inp("ep", "EP fee £")}</div><div class="three">${inp("vat", "VAT £")}${inp("net", p.status === "invoice" ? "Total £" : "Net paid £")}<div class="fld"><label for="rm-on-${i}">${p.status === "invoice" ? "Sent on" : "Paid on"}</label><input class="inp" type="date" id="rm-on-${i}" value="${esc(p.paidOn || TODAY)}"></div></div>`
           : payHTML({...p, kind: p.status === "pending" ? "pending" : "remittance", checks: []}, false)}
         <div class="fld"><label for="rm-job-${i}">For the job</label><select class="inp" id="rm-job-${i}" data-rmjob="${i}">${opts(p.target)}</select></div>
-        ${checks.length ? `<ul class="checks">${checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what.replace("Paid days not marked worked:", "Paid for days not marked worked in this job (saving marks them worked):"))}</li>`).join("")}</ul>` : ""}
+        ${checks.length ? `<ul class="checks">${checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what.replace("Paid days not marked worked:", "Paid for days not marked worked in this job – check it's the right job:"))}</li>`).join("")}</ul>` : ""}
       </section>`;
     }).join("");
   }
@@ -1584,7 +1584,8 @@ async function readRemitNow(){
     const merged = [];
     list.forEach(p => { const m = merged.findIndex(q => Money.samePayment(q, p)); if (m === -1) merged.push(p); else merged[m] = Money.mergePayment(merged[m], p); });
     merged.sort((a, b) => String(a.days[0] || a.paidOn || "").localeCompare(String(b.days[0] || b.paidOn || "")));
-    merged.forEach(p => { p.target = p.job || (remit.forId && merged.length === 1 ? remit.forId : "new"); });
+    // matched to one of your jobs, or left for you to choose (nothing is added on its own)
+    merged.forEach(p => { p.target = p.job || (remit.forId && merged.length === 1 ? remit.forId : ""); });
     remit.list = merged;
   } catch (e) {
     remit.log.push({ok: false, what: "Something went wrong: " + (e && e.message || e)});
@@ -1617,6 +1618,8 @@ function payRecord(p, fees, worked, rate, other){
 }
 async function saveRemit(){
   pullRemit();
+  const unchosen = (remit.list || []).filter(p => !p.target).length;
+  if (unchosen){ toast(`Choose where ${unchosen === 1 ? "1 payment goes" : unchosen + " payments go"} (a job, a new job, or don't save)`); return; }
   const list = (remit.list || []).filter(p => p.target && p.target !== "skip");
   if (!list.length){ toast("Nothing to save"); return; }
   if (list.some(p => p.net === null)){ toast("A payment has no amount – type it first"); return; }
@@ -1624,33 +1627,19 @@ async function saveRemit(){
   const batch = S.db.batch();
   // payments for jobs you have
   const byJob = new Map();
-  let marked = 0;
   list.filter(p => p.target !== "new").forEach(p => { if (!byJob.has(p.target)) byJob.set(p.target, []); byJob.get(p.target).push(p); });
   byJob.forEach((ps, id) => {
     const x = jobs.find(y => y.id === id); if (!x) return;
     let pays = legacyPayments(x.j.c);
-    // a day you were paid for is a day you worked: it's marked worked (blue) in the job
-    const paidDays = [...new Set(ps.filter(p => p.status !== "invoice").flatMap(p => p.days || []))].filter(d => !x.worked.includes(d)).sort();
-    const worked = [...x.worked, ...paidDays].sort();
     ps.forEach(p => {
-      const rec = payRecord(p, x.j.fees, worked, x.j.rate, remitPaidElsewhere(p, x));
+      const rec = payRecord(p, x.j.fees, x.worked, x.j.rate, remitPaidElsewhere(p, x));
       const k = pays.findIndex(q => Money.samePayment(q, rec));
       if (k === -1) pays.push(rec); else pays[k] = {...Money.mergePayment(pays[k], rec), id: pays[k].id, checks: rec.checks};
     });
-    const ch = {"pay.payments": pays, updatedAt: now};
-    if (paidDays.length){
-      const dates = (x.j.c.dates || []).map(e => ({...e}));
-      paidDays.forEach(d => {
-        const e = dates.find(y => y.d === d);
-        if (e){ delete e.done; e.state = "worked"; } else dates.push({d, kind: "film", state: "worked"});
-        ch["mine.days." + d + ".state"] = "worked"; ch["mine.days." + d + ".at"] = now;
-      });
-      ch.dates = dates.sort((a, b) => a.d.localeCompare(b.d)); ch.needsDerive = true;
-      marked += paidDays.length;
-    }
-    batch.update(S.db.collection("calls").doc(id), ch);
+    batch.update(S.db.collection("calls").doc(id), {"pay.payments": pays, updatedAt: now});
   });
   // jobs that weren't in your schedule (e.g. before it started): one per production + agency
+  if (list.some(p => p.target === "new" && !p.project)){ toast("A payment with no production name can't become a new job – choose one of your jobs"); return; }
   const fresh = new Map();
   list.filter(p => p.target === "new").forEach(p => { const k = (p.project || "Payment").toLowerCase() + "|" + (p.agency || "").toLowerCase(); if (!fresh.has(k)) fresh.set(k, []); fresh.get(k).push(p); });
   let made = 0;
@@ -1669,7 +1658,7 @@ async function saveRemit(){
   });
   try {
     await batch.commit();
-    toast(`Saved ${list.length} payment${list.length === 1 ? "" : "s"}${made ? ` · ${made} new worked job${made === 1 ? "" : "s"} added` : ""}${marked ? ` · ${marked} paid day${marked === 1 ? "" : "s"} marked worked` : ""}`);
+    toast(`Saved ${list.length} payment${list.length === 1 ? "" : "s"}${made ? ` · ${made} new worked job${made === 1 ? "" : "s"} added` : ""}`);
     closeSheet(); render();
   } catch (e) { writeFailed(e); }
 }

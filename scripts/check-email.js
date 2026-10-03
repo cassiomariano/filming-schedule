@@ -649,6 +649,29 @@ async function writeAll(coll, items, idOf) {
     return;
   }
 
+  if (MODE === "fix") {
+    // a one-off correction you asked for: the sealed list says which jobs to remove and which fields to change
+    const { open } = require("./vault.js");
+    const fix = open(serviceAccount.private_key, JSON.parse(fs.readFileSync("fix.sealed.json", "utf8")));
+    let del = 0, upd = 0;
+    for (const u of fix.update || []) {
+      const ref = db.collection("calls").doc(u.id);
+      if (!(await ref.get()).exists) continue;
+      await ref.update({ ...u.set, updatedAt: nowIso() }); upd++;
+    }
+    for (const id of fix.remove || []) {
+      const recs = await db.collection("records").where("job", "==", id).get();
+      const b = db.batch();
+      recs.docs.forEach(d => b.update(d.ref, { job: null, state: "ignored", why: "You asked for its job to be removed" }));
+      b.delete(db.collection("calls").doc(id));
+      await b.commit();
+      delete INDEX[id]; indexDirty = true; del++;
+    }
+    await saveMeta();
+    report("notice", "Fix", `${del} job${del === 1 ? "" : "s"} removed, ${upd} changed.`);
+    return;
+  }
+
   // safety lock: the new robot works only on data moved to the new layout (run "migrate" once)
   if (!INDEX_V && MODE !== "rederive") { report("notice", "Waiting", "The schedule hasn't been moved to the new robot yet (mode: migrate). Nothing was changed."); return; }
   let failed = 0, check = null;

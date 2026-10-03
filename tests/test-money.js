@@ -142,5 +142,6 @@ const ttc = M.checkPayment(tt[0], null, ["2026-05-28"]);
 ok("Talent Talks: checked against the 12.5% written on it when the emails don't say", ttc.every(c => c.ok) && ttc.some(c => /commission is 12\.5%/.test(c.what)), ttc);
 ok("No name from the remittance is kept", JSON.stringify(cc.concat(tt)).indexOf("Test Person") === -1);
 
+ok("A payment from an agency never goes to a job with no agency", M.readPayments(require("fs").readFileSync(__dirname + "/fixtures/ep-remittances.txt", "utf8"), [{ id: "n", name: "Other work", agency: "", worked: ["2025-03-17", "2025-02-25"] }], "x").every(p => p.job === null));
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

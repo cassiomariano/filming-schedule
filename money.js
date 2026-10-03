@@ -347,7 +347,8 @@
   function agencyKey(a) { return String(a || "").toLowerCase().replace(/\b(ltd|limited|casting|extras?|agency|uk|talent|management|the)\b/g, "").replace(/[^a-z0-9]/g, ""); }
   function sameAgency(a, b) { var x = agencyKey(a), y = agencyKey(b); return !x || !y || x === y || x.indexOf(y) !== -1 || y.indexOf(x) !== -1; }
   function matchPayment(p, text, jobs) {
-    jobs = jobs.filter(function (j) { return sameAgency(p.agency, j.agency); });
+    // a payment that names its agency only goes to a job of that agency (never to one with no agency)
+    jobs = jobs.filter(function (j) { return agencyKey(p.agency) ? agencyKey(j.agency) && sameAgency(p.agency, j.agency) : true; });
     var byDay = jobs.filter(function (j) { return p.days.some(function (d) { return (j.worked || []).indexOf(d) !== -1; }); });
     if (byDay.length === 1) return byDay[0].id;
     var forms = function (name) { var f = String(name || ""); return [f, f.replace(/\s*[\(\[].*$/, ""), f.replace(/^[A-Za-z]{2,4}\s*[-–:]\s*/, "")].map(norm).filter(function (x) { return x.length >= 4; }); };
