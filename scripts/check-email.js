@@ -1293,7 +1293,7 @@ async function handleMail(m, account, counts, rereading) {
     const { open } = require("./vault.js");
     const ops = open(serviceAccount.private_key, JSON.parse(require("fs").readFileSync("patch.sealed.json", "utf8")));
     const ALLOWED = new Set(["project", "agency", "role", "status", "dates", "location", "fitLocation", "filmLocation", "rate", "notes",
-      "respondBy", "received", "review", "reviewReason", "newInfo", "newInfoText", "attention", "emails", "links", "answers"]);
+      "respondBy", "received", "review", "reviewReason", "newInfo", "newInfoText", "attention", "emails", "links", "answers", "agencyKey", "history", "source"]);
     const n = { update: 0, delete: 0, create: 0, skipped: 0 };
     for (const o of ops) {
       const ref = db.collection("calls").doc(String(o.id || ""));
