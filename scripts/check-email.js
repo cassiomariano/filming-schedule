@@ -322,9 +322,14 @@ async function fileRecord(rec, fresh) {
     return;
   }
   // not sure: your Check list (never guessed) — or ignored when there's nothing it could belong to
-  const state = m.candidates.length || rec.kind === "booked" || rec.kind === "calltime" ? "check" : "ignored";
+  const state = unsureState(rec, m);
   await ref.set({ ...clean(rec), job: null, state, how: m.how, why: m.why, candidates: m.candidates, filedAt: nowIso() }, { merge: true });
   if (state === "check") stats.check++; else stats.ignored++;
+}
+// where an email the robot isn't sure about goes: your Check list only when it would change something
+function unsureState(rec, m) {
+  if (rec.kind === "calltime" && !((rec.parsed || {}).call || {}).time) return "other";   // "call details to follow": nothing to file yet
+  return m.candidates.length || rec.kind === "booked" || rec.kind === "calltime" ? "check" : "ignored";
 }
 // "seen": when the robot first saw the email (an email seen after a job was saved still counts, even if it is dated earlier)
 // the same email twice: same subject, same text, sent within 4 days (two releases on different days differ in their text)
@@ -340,6 +345,7 @@ async function retryChecks() {
     if (rec.userJob === "ignore") { await d.ref.update({ state: "ignored", why: "You chose to ignore it", job: null }); continue; }
     const before = rec.job || null;
     const m = Core.matchRecord(rec, INDEX);
+    if (!m.sure && !rec.userJob && unsureState(rec, m) !== "check") { await d.ref.update({ state: unsureState(rec, m) }); continue; }
     if ((m.job && m.sure) || (!m.job && m.sure)) {
       if (before && before !== m.job) {
         await db.collection("calls").doc(before).update({ records: FieldValue.arrayRemove(rec.key), needsDerive: true }).catch(() => {});
