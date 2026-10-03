@@ -1650,6 +1650,7 @@ function pullForm(){
     const dd = $("#dd-"+i, layer); if (!dd) return e;
     // start from the saved day so extra fields (answer, note…) are kept
     const o = {...e, d: dd.value, kind: $("#dk-"+i, layer).value};
+    if (o.d !== e.d) delete o.releasedAt;   // a moved day is not the day that release was about
     // the place box shows callPlace if the day has one, else loc – write it back to the same field
     const placeField = e.callPlace ? "callPlace" : "loc";
     const l = $("#dl-"+i, layer).value.trim();

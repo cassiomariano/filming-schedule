@@ -685,6 +685,7 @@ async function enrichFromPortal(call) {
   r.dates.forEach(x => {
     const have = dates.find(e => sameDay(e, x));
     if (have && have.state === "released" && have.releasedAt && askedOn && have.releasedAt < askedOn &&
+        dates.filter(e => e.d === x.d).length === 1 &&
         ["pending", "available"].includes(call.status) && !/not (been )?selected|no longer (needed|required)|released|cancel+ed/i.test(text.slice(0, 600))) {
       delete have.state; delete have.releasedAt; delete have.answer;
     }
