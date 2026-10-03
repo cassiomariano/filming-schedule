@@ -23,8 +23,9 @@ const londonDate = () => new Date().toLocaleDateString("en-CA", { timeZone: "Eur
 
 // the EP message link from the agency's email ("Respond" button)
 function portalLink(c) {
-  const l = (c.links || []).find(x => x.kind === "respond" && /^https:\/\/[a-z0-9.-]*epcastingportal\.com\//i.test(x.url));
-  return l ? l.url : null;
+  // the newest one: a later enquiry (e.g. a new role) has its own page
+  const eps = (c.links || []).filter(x => x.kind === "respond" && /^https:\/\/[a-z0-9.-]*epcastingportal\.com\//i.test(x.url));
+  return eps.length ? eps[eps.length - 1].url : null;
 }
 
 (async () => {
