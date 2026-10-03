@@ -1257,7 +1257,9 @@ function moneyJobs(){
     // what you earn before fees: day rate × days + extras (no rate: the gross on the remittances)
     const gross = rate !== null ? rate * worked.length + extras : (pays.reduce((s, x) => s + (x.gross || 0), 0) || extras);
     const expected = fees ? Money.expectedNet(gross, fees).net : gross;    // what should reach your bank
-    const bad = all.some(x => (x.checks || []).some(k => !k.ok));
+    // checks worked out now (a later payment pays the days an earlier one didn't)
+    const live = all.map(x => x.kind === "manual" ? x : {...x, checks: Money.checkPayment(x, fees, worked, rate, paidDaysBut(all, x))});
+    const bad = live.some(x => (x.checks || []).some(k => !k.ok));
     const last = worked[worked.length - 1];
     const ago = Math.round((parse(TODAY) - parse(last)) / 864e5);
     let status = "unpaid";
@@ -1265,10 +1267,14 @@ function moneyJobs(){
     else if (paid > 0) status = "part";
     else if (invoices.length) status = "invoiced";
     else if (ago > OVERDUE_DAYS) status = "overdue";
-    jobs.push({c, worked, last, rate, estimate: guess !== null, extras, paid, paidOn, note: p.note || "", gross, fees, expected, status, bad, payments: all,
+    jobs.push({c, worked, last, rate, estimate: guess !== null, extras, paid, paidOn, note: p.note || "", gross, fees, expected, status, bad, payments: live,
       owed: status === "paid" ? 0 : Math.max(0, expected - paid)});
   }
   return jobs.sort((a, b) => b.last.localeCompare(a.last) || nameOf(a.c).localeCompare(nameOf(b.c)));
+}
+/* days paid by a job's other payments (invoices aren't payments yet) */
+function paidDaysBut(list, x){
+  return list.filter(y => y !== x && y.kind !== "invoice" && !(y.id && y.id === x.id)).flatMap(y => y.days || []);
 }
 /* what a job earned between two days: rate × worked days in the range (+ extras if its last day is in the range) */
 function earnedBetween(j, from, to){
@@ -1523,14 +1529,14 @@ function drawRemit(){
       : `<p style="margin:0"><b>No payments found.</b> See the notes above for each file.</p>`;
     body += list.map((p, i) => {
       const x = jobs.find(y => y.id === p.target);
-      const checks = Money.checkPayment(p, x ? x.j.fees : agencyFees(p.agency), x ? x.worked : p.days, x ? x.j.rate : null);
+      const checks = Money.checkPayment(p, x ? x.j.fees : agencyFees(p.agency), x ? x.worked : p.days, x ? x.j.rate : null, x ? remitPaidElsewhere(p, x) : []);
       const editable = p.source === "text";
       const inp = (k, l) => `<div class="fld"><label for="rm-${k}-${i}">${l}</label><input class="inp" id="rm-${k}-${i}" type="number" step="0.01" inputmode="decimal" value="${p[k] ?? ""}"></div>`;
       return `<section class="panel" style="margin:0"><h2>${esc(p.project || "Payment " + (i + 1))}${p.agency ? ` · ${esc(p.agency)}` : ""}</h2>
         ${editable ? `<div class="three">${inp("gross", "Gross £")}${inp("commission", "Commission £")}${inp("ep", "EP fee £")}</div><div class="three">${inp("vat", "VAT £")}${inp("net", p.status === "invoice" ? "Total £" : "Net paid £")}<div class="fld"><label for="rm-on-${i}">${p.status === "invoice" ? "Sent on" : "Paid on"}</label><input class="inp" type="date" id="rm-on-${i}" value="${esc(p.paidOn || TODAY)}"></div></div>`
           : payHTML({...p, kind: p.status === "pending" ? "pending" : "remittance", checks: []}, false)}
         <div class="fld"><label for="rm-job-${i}">For the job</label><select class="inp" id="rm-job-${i}" data-rmjob="${i}">${opts(p.target)}</select></div>
-        ${checks.length ? `<ul class="checks">${checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what)}</li>`).join("")}</ul>` : ""}
+        ${checks.length ? `<ul class="checks">${checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what.replace("Paid days not marked worked:", "Paid for days not marked worked in this job (saving marks them worked):"))}</li>`).join("")}</ul>` : ""}
       </section>`;
     }).join("");
   }
@@ -1580,6 +1586,12 @@ async function readRemitNow(){
   } finally { remit.busy = false; remit.progress = ""; }
   drawRemit();
 }
+/* days of this job paid by its saved payments or by the other payments being added now */
+function remitPaidElsewhere(p, x){
+  const saved = x.j.payments.filter(y => y.kind !== "invoice" && !Money.samePayment(y, p)).flatMap(y => y.days || []);
+  const now = (remit.list || []).filter(q => q !== p && q.target === x.id && q.status !== "invoice").flatMap(q => q.days || []);
+  return saved.concat(now);
+}
 /* your corrections (amounts typed, job chosen) count before saving */
 function pullRemit(){
   (remit.list || []).forEach((p, i) => {
@@ -1591,11 +1603,11 @@ function pullRemit(){
   });
 }
 /* what a payment keeps: the figures, never the PDF or anything that identifies you */
-function payRecord(p, fees, worked, rate){
+function payRecord(p, fees, worked, rate, other){
   const keep = ["source", "deposited", "project", "agency", "invoiceNo", "paidOn", "taxPoint", "days", "perDay", "hours", "gross", "ep", "epVat", "commission", "commissionVat", "fees", "vat", "net", "text"];
   const out = {id: "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), kind: p.status === "invoice" ? "invoice" : p.status === "pending" ? "pending" : "remittance", savedAt: new Date().toISOString()};
   keep.forEach(k => { if (p[k] !== undefined) out[k] = p[k]; });
-  out.checks = Money.checkPayment(out, fees, worked, rate);
+  out.checks = Money.checkPayment(out, fees, worked, rate, other || []);
   return out;
 }
 async function saveRemit(){
@@ -1607,16 +1619,31 @@ async function saveRemit(){
   const batch = S.db.batch();
   // payments for jobs you have
   const byJob = new Map();
+  let marked = 0;
   list.filter(p => p.target !== "new").forEach(p => { if (!byJob.has(p.target)) byJob.set(p.target, []); byJob.get(p.target).push(p); });
   byJob.forEach((ps, id) => {
     const x = jobs.find(y => y.id === id); if (!x) return;
     let pays = legacyPayments(x.j.c);
+    // a day you were paid for is a day you worked: it's marked worked (blue) in the job
+    const paidDays = [...new Set(ps.filter(p => p.status !== "invoice").flatMap(p => p.days || []))].filter(d => !x.worked.includes(d)).sort();
+    const worked = [...x.worked, ...paidDays].sort();
     ps.forEach(p => {
-      const rec = payRecord(p, x.j.fees, x.worked, x.j.rate);
+      const rec = payRecord(p, x.j.fees, worked, x.j.rate, remitPaidElsewhere(p, x));
       const k = pays.findIndex(q => Money.samePayment(q, rec));
       if (k === -1) pays.push(rec); else pays[k] = {...Money.mergePayment(pays[k], rec), id: pays[k].id, checks: rec.checks};
     });
-    batch.update(S.db.collection("calls").doc(id), {"pay.payments": pays, updatedAt: now});
+    const ch = {"pay.payments": pays, updatedAt: now};
+    if (paidDays.length){
+      const dates = (x.j.c.dates || []).map(e => ({...e}));
+      paidDays.forEach(d => {
+        const e = dates.find(y => y.d === d);
+        if (e){ delete e.done; e.state = "worked"; } else dates.push({d, kind: "film", state: "worked"});
+        ch["mine.days." + d + ".state"] = "worked"; ch["mine.days." + d + ".at"] = now;
+      });
+      ch.dates = dates.sort((a, b) => a.d.localeCompare(b.d)); ch.needsDerive = true;
+      marked += paidDays.length;
+    }
+    batch.update(S.db.collection("calls").doc(id), ch);
   });
   // jobs that weren't in your schedule (e.g. before it started): one per production + agency
   const fresh = new Map();
@@ -1631,13 +1658,13 @@ async function saveRemit(){
     const job = {...blankCall(), project, agency: ps[0].agency || "", status: "done", dates, received: days[0] || TODAY, source: "payment", notes: "Added from a payment",
       createdAt: now, updatedAt: now, agencyKey: agencyKeyOf(ps[0].agency), mine: {}, names: [], records: [], needsDerive: true,
       base: {at: now, status: "done", dates, project, agency: ps[0].agency || "", role: "", received: days[0] || TODAY},
-      pay: {payments: ps.map(p => payRecord(p, fees, days, null))}};
+      pay: {payments: ps.map(p => payRecord(p, fees, days, null, ps.filter(q => q !== p && q.status !== "invoice").flatMap(q => q.days || [])))}};
     batch.set(S.db.collection("calls").doc(id), job);
     made++;
   });
   try {
     await batch.commit();
-    toast(`Saved ${list.length} payment${list.length === 1 ? "" : "s"}${made ? ` · ${made} new worked job${made === 1 ? "" : "s"} added` : ""}`);
+    toast(`Saved ${list.length} payment${list.length === 1 ? "" : "s"}${made ? ` · ${made} new worked job${made === 1 ? "" : "s"} added` : ""}${marked ? ` · ${marked} paid day${marked === 1 ? "" : "s"} marked worked` : ""}`);
     closeSheet(); render();
   } catch (e) { writeFailed(e); }
 }

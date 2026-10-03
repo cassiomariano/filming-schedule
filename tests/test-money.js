@@ -113,5 +113,20 @@ ok("The PDF and its row are the same payment; together they keep the breakdown A
 const rowsCells = M.readPayments(tab.replace(/\t/g, "\n"), [], "x");
 ok("Payments page copied one cell per line also works", rowsCells.length === 2 && rowsCells[1].paidOn === "2025-03-25", rowsCells);
 
+// 9) seen on real remittances (made-up names): no commission on a meal; other payments' days; agency must match
+const f20 = { agency: 20, ep: 0, vat: 20, plusVat: true, from: "agency" };
+const meal = { gross: 189.58, commission: 34.91, ep: null, vat: 6.98, net: 147.69, days: ["2025-04-03"],
+  perDay: [{ d: "2025-04-03", parts: { Meal: 15, Travel: 22.54, "S/F": 22.17, Overtime: 11.14, "Holiday Pay": 11.54, "Basic Fee": 107.19 }, total: 189.58 }] };
+const cm = M.checkPayment(meal, f20, ["2025-04-03"]);
+ok("No commission on the £15 meal: 20% of the rest passes", cm.every(c => c.ok) && cm.some(c => /none on the £15\.00 meal/.test(c.what)), cm);
+ok("A real 18% commission is still caught", M.checkPayment({ ...meal, commission: 30.00, vat: 6.00, net: 153.58 }, f20, ["2025-04-03"]).some(c => !c.ok && /commission/.test(c.what)));
+const two = M.checkPayment({ gross: 100, commission: 20, ep: null, vat: 4, net: 76, days: ["2026-08-14"] }, f20, ["2026-08-14", "2026-08-28", "2026-09-07"], null, ["2026-08-28"]);
+ok("Days paid by the job's other payment aren't 'not paid yet'", two.some(c => !c.ok && c.what === "Not paid yet: 2026-09-07"), two);
+const agJobs = [{ id: "cc", name: "Gannet", agency: "Casting Collective", worked: ["2025-07-10"] }];
+ok("A payment from another agency never goes to that job", M.readPayments("Payment for Gannet\nNet amount paid: £50.00", agJobs, "x")[0].job === "cc" &&
+  M.sameAgency("Extra People", "Casting Collective") === false && M.sameAgency("Extra People", "Extra People Ltd") && M.sameAgency("", "Casting Collective"));
+
+const wrongAg = M.readPayments(require("fs").readFileSync(__dirname + "/fixtures/ep-remittances.txt", "utf8"), [{ id: "o", name: "Kestrel One", agency: "Other Agency", worked: ["2025-03-17"] }], "x");
+ok("Same name and day but another agency: not matched (added as a new job instead)", wrongAg.every(p => p.job === null), wrongAg.map(p => p.job));
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

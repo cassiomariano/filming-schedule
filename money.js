@@ -266,7 +266,11 @@
     list.forEach(function (p) { p.job = matchPayment(p, t, jobs || []); });
     return list;
   }
+  // the same agency (or one of them unknown): "Extra People" never goes to a "Casting Collective" job
+  function agencyKey(a) { return String(a || "").toLowerCase().replace(/\b(ltd|limited|casting|extras?|agency|uk|talent|management|the)\b/g, "").replace(/[^a-z0-9]/g, ""); }
+  function sameAgency(a, b) { var x = agencyKey(a), y = agencyKey(b); return !x || !y || x === y || x.indexOf(y) !== -1 || y.indexOf(x) !== -1; }
   function matchPayment(p, text, jobs) {
+    jobs = jobs.filter(function (j) { return sameAgency(p.agency, j.agency); });
     var byDay = jobs.filter(function (j) { return p.days.some(function (d) { return (j.worked || []).indexOf(d) !== -1; }); });
     if (byDay.length === 1) return byDay[0].id;
     var forms = function (name) { var f = String(name || ""); return [f, f.replace(/\s*[\(\[].*$/, ""), f.replace(/^[A-Za-z]{2,4}\s*[-–:]\s*/, "")].map(norm).filter(function (x) { return x.length >= 4; }); };
@@ -325,11 +329,18 @@
 
   // ---------- is it right? ----------
   // payment = { gross, commission, ep, vat, net, days[] }; fees from the emails; worked = the job's worked days
-  function checkPayment(p, fees, worked, rate) {
+  // parts the agency takes no commission on (seen on Extra People remittances: a £15 meal)
+  var NO_COMMISSION = /^(meals?( allowance)?|subsistence|per ?diem)$/i;
+  function noCommission(p) {
+    return r2((p.perDay || []).reduce(function (s, x) { return s + Object.keys(x.parts || {}).reduce(function (t, k) { return t + (NO_COMMISSION.test(k.trim()) ? x.parts[k] : 0); }, 0); }, 0));
+  }
+  // paidElsewhere = days already paid by the job's other payments (they are not "not paid yet")
+  function checkPayment(p, fees, worked, rate, paidElsewhere) {
     var out = [];
     var near = function (a, b) { return Math.abs(a - b) <= 0.02 + Math.abs(b) * 0.002; };
+    var other = paidElsewhere || [];
     if (p.days && p.days.length && worked) {
-      var missing = worked.filter(function (d) { return p.days.indexOf(d) === -1; });
+      var missing = worked.filter(function (d) { return p.days.indexOf(d) === -1 && other.indexOf(d) === -1; });
       var extra = p.days.filter(function (d) { return worked.indexOf(d) === -1; });
       out.push(!missing.length && !extra.length ? { ok: true, what: "Pays every day you worked (" + p.days.length + ")" }
         : { ok: false, what: (missing.length ? "Not paid yet: " + missing.join(", ") : "") + (missing.length && extra.length ? " · " : "") + (extra.length ? "Paid days not marked worked: " + extra.join(", ") : "") });
@@ -346,10 +357,19 @@
       if (p.vat !== null && fees.plusVat) out.push(near(p.vat, r2(p.fees * fees.vat / 100)) ? { ok: true, what: "VAT is " + fees.vat + "% of the fees" } : { ok: false, what: "VAT is " + p.vat.toFixed(2) + " (" + fees.vat + "% of the fees would be " + r2(p.fees * fees.vat / 100).toFixed(2) + ")" });
     }
     if (fees && p.gross && (p.commission !== null || p.ep !== null)) {
-      var exp = expectedNet(p.gross, fees);
+      // fees are on the gross, or on the gross without a meal allowance (whichever the remittance used)
+      var free = noCommission(p), base = p.gross;
+      if (free > 0) {
+        var onAll = expectedNet(p.gross, fees), onPart = expectedNet(r2(p.gross - free), fees);
+        var paidFee = p.commission !== null ? p.commission : p.ep, ref = p.commission !== null ? "commission" : "ep";
+        if (!near(paidFee, onAll[ref]) && near(paidFee, onPart[ref])) base = r2(p.gross - free);
+      }
+      var exp = expectedNet(base, fees);
+      exp.net = r2(p.gross - exp.commission - exp.ep - exp.vat);
+      var noFee = base !== p.gross ? " (none on the £" + free.toFixed(2) + " meal)" : "";
       var said = { agency: "usual for this agency", remittance: "from an earlier remittance", you: "you typed" }[fees.from] || "the emails say";
-      if (p.commission !== null) out.push(near(p.commission, exp.commission) ? { ok: true, what: "Agency commission is " + fees.agency + "%" } : { ok: false, what: "Agency commission is " + (p.commission / p.gross * 100).toFixed(1) + "% (" + said + " " + fees.agency + "%)" });
-      if (p.ep !== null && fees.ep) out.push(near(p.ep, exp.ep) ? { ok: true, what: "EP admin fee is " + fees.ep + "%" } : { ok: false, what: "EP admin fee is " + (p.ep / p.gross * 100).toFixed(1) + "% (" + said + " " + fees.ep + "%)" });
+      if (p.commission !== null) out.push(near(p.commission, exp.commission) ? { ok: true, what: "Agency commission is " + fees.agency + "%" + noFee } : { ok: false, what: "Agency commission is " + (p.commission / base * 100).toFixed(1) + "% (" + said + " " + fees.agency + "%)" });
+      if (p.ep !== null && fees.ep) out.push(near(p.ep, exp.ep) ? { ok: true, what: "EP admin fee is " + fees.ep + "%" + noFee } : { ok: false, what: "EP admin fee is " + (p.ep / base * 100).toFixed(1) + "% (" + said + " " + fees.ep + "%)" });
       if (p.vat !== null && fees.plusVat) {
         var base = (p.commission || 0) + (p.ep || 0);
         out.push(near(p.vat, r2(base * fees.vat / 100)) ? { ok: true, what: "VAT is " + fees.vat + "% of the fees" } : { ok: false, what: "VAT is " + p.vat.toFixed(2) + " (" + fees.vat + "% of the fees would be " + r2(base * fees.vat / 100).toFixed(2) + ")" });
@@ -368,7 +388,7 @@
   }
 
   var api = { feesFrom: feesFrom, expectedNet: expectedNet, readRemittance: readRemittance, readPayments: readPayments, readEPRemittance: readEPRemittance, readEPTable: readEPTable,
-    samePayment: samePayment, mergePayment: mergePayment, layoutText: layoutText, redact: redact, checkPayment: checkPayment, datesIn: datesIn, PART_NAMES: PART_NAMES };
+    samePayment: samePayment, mergePayment: mergePayment, layoutText: layoutText, redact: redact, checkPayment: checkPayment, sameAgency: sameAgency, datesIn: datesIn, PART_NAMES: PART_NAMES };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.Money = api;
 })(this);
