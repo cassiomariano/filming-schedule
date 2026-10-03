@@ -31,11 +31,21 @@ const epu = { found: 0, opened: 0, login: 0, booked: 0, released: 0, unclear: 0,
 // Booking, release and call-time emails often don't label the production. Look for the name of
 // a job you already have in the subject (then the body); the longest name found wins.
 function norm(x) { return " " + String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() + " "; }
+// a job's name and its short form: "Falcon(Project 12)" → also "Falcon"; "EXP - Roundabout S2" → also "Roundabout S2"
+function nameForms(p) {
+  const full = String(p || "").trim();
+  const forms = [full, full.replace(/\s*\(.*$/, ""), full.replace(/^[A-Z]{2,4}\s*-\s*/, ""), full.split(/\s+-\s+/)[0]];
+  // also without a season marker: "Roundabout S2" → "Roundabout"
+  forms.slice().forEach(f => forms.push(f.replace(/\s+(s|series|season)\s*\d+\s*$/i, "")));
+  return [...new Set(forms.map(f => f.trim()).filter(f => norm(f).trim().length >= 4))];
+}
 function findKnownProject(subject, text) {
-  const names = [...new Set((existingCalls || []).map(c => String(c.project || "").trim()).filter(p => norm(p).trim().length >= 4))];
+  const names = [...new Set((existingCalls || []).map(c => String(c.project || "").trim()).filter(Boolean))];
   for (const hay of [norm(subject), norm(String(text || "").slice(0, 4000))]) {
-    const hits = names.filter(p => hay.includes(norm(p)));
-    if (hits.length) return hits.sort((a, b) => norm(b).length - norm(a).length)[0];
+    // the longest matching form wins, and the job's full name is what we return
+    const hits = [];
+    names.forEach(p => nameForms(p).forEach(f => { if (hay.includes(norm(f))) hits.push([p, norm(f).length]); }));
+    if (hits.length) return hits.sort((a, b) => b[1] - a[1])[0][0];
   }
   return "";
 }
@@ -623,8 +633,9 @@ function tickedAnswers(text, parse) {
 }
 const portal = { read: 0, failed: 0, login: 0, answered: 0, recorded: 0, radios: 0, ticked: 0, scripts: 0, dated: 0 };
 function portalLink(c) {
-  const l = (c.links || []).find(x => x.kind === "respond" && /^https:\/\/[a-z0-9.-]*epcastingportal\.com\//i.test(x.url));
-  return l ? l.url : null;
+  // the NEWEST EP page (a later request for the same job adds its link at the end)
+  const eps = (c.links || []).filter(x => x.kind === "respond" && /^https:\/\/[a-z0-9.-]*epcastingportal\.com\//i.test(x.url));
+  return eps.length ? eps[eps.length - 1].url : null;
 }
 async function fetchPortalPage(url) {
   try {
@@ -662,7 +673,7 @@ async function enrichFromPortal(call) {
   const dates = (call.dates || []).map(e => ({ ...e }));
   // New days are only added to a new or unanswered job (so days you deleted don't come back).
   // The page's day type (fitting / rehearsal / shoot) is more reliable than the email's.
-  const mayAdd = !call.id || call.status === "pending";
+  const mayAdd = !call.id || call.status === "pending" || call.status === "available";
   r.dates.forEach(x => {
     const have = dates.find(e => sameDay(e, x));
     if (!have) { if (mayAdd) dates.push({ d: x.d, kind: x.kind, ...(x.loc ? { loc: x.loc } : {}), ...(x.night ? { night: true } : {}) }); }
