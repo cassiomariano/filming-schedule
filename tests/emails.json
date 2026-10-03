@@ -713,5 +713,27 @@
    "isCall": true,
    "kind": "released"
   }
+ },
+ {
+  "name": "EP page: date and (Fitting) label separated by a blank line; label beats the description",
+  "email": {
+   "subject": "New Availability request on Example Film",
+   "fromName": "Extra People",
+   "fromEmail": "noreply@extra-people.uk.epcastingportal.com",
+   "received": "2026-10-01",
+   "html": "<p>Thank you! We have successfully recorded your response.</p><h4>Hello Cassio!</h4><p>You have an availability enquiry for:</p><p>Example Film</p><p>Please respond before:</p><p>Monday 05 Oct 09:00</p>\n<p><b>Costume Fitting Dates - You will be required to fit on one day the week before the shoot</b></p><p>Week 12th October</p><p>Fitting @ West Yorkshire - Exact location TBC</p><p><b>Filming Dates</b></p><p>23rd &amp; 24th October</p><p>Filming will be in West Yorkshire.</p>\n<h3>Availability request</h3><h3>Mandatory dates</h3><h4>Availability for all these dates</h4>\n<div><p><b>23 Oct 2026</b></p><br><p>(Filming)</p></div><div><p><b>24 Oct 2026</b></p><br><p>(Filming)</p></div><p>Available</p><p>Not available</p>\n<h3>Optional dates</h3><div><p><b>12 Oct 2026</b></p><br><p>(Fitting)</p></div><p>Available</p><p>Not available</p><div><p><b>13 Oct 2026</b></p><br><p>(Fitting)</p></div><p>Available</p><p>Not available</p><div><p><b>14 Oct 2026</b></p><br><p>(Fitting)</p></div><p>Available</p><p>Not available</p><div><p><b>15 Oct 2026</b></p><br><p>(Fitting)</p></div><p>Available</p><p>Not available</p><div><p><b>16 Oct 2026</b></p><br><p>(Fitting)</p></div><p>Available</p><p>Not available</p>"
+  },
+  "expect": {
+   "isCall": true,
+   "dates": [
+    "2026-10-12 fit",
+    "2026-10-13 fit",
+    "2026-10-14 fit",
+    "2026-10-15 fit",
+    "2026-10-16 fit",
+    "2026-10-23 film",
+    "2026-10-24 film"
+   ]
+  }
  }
 ]

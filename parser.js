@@ -549,14 +549,16 @@
       if (i > 0 && /(respond|reply) before:?\s*$|deadline:?\s*$|expires?:?\s*$/i.test(prev)) continue;
       // EP pages put "(Rehearsals in Epsom)" on the line under the date: read them together.
       // The word in brackets decides the kind of day, before any heading.
-      var bracketKind = "";
-      if (all[i + 1] && /^\(/.test(all[i + 1]) && /\d/.test(line)) {
-        var b = all[i + 1].split("|")[0].toLowerCase();
+      // (pages often leave a blank line between the date and the bracket)
+      var bracketKind = "", nb = i + 1;
+      while (nb < all.length && nb <= i + 2 && !String(all[nb]).trim()) nb++;
+      if (all[nb] && /^\(/.test(all[nb]) && /\d/.test(line)) {
+        var b = all[nb].split("|")[0].toLowerCase();
         if (/rehears/.test(b)) bracketKind = "reh";
         else if (/\bfit|costume/.test(b)) bracketKind = "fit";
         else if (/film|shoot/.test(b)) bracketKind = "film";
-        line = line + " " + all[i + 1];
-        i++;
+        line = line + " " + all[nb];
+        i = nb;
       }
 
       var found = [], pendingOrdinals = [], m, n;
@@ -691,6 +693,7 @@
         if (!kind) kind = mode;
 
         var entry = { d: toKey(year, f.mo, f.d), kind: kind };
+        if (bracketKind) entry.sure = true;               // labelled by the page itself: "(Fitting)"
         // a place after "@": it must start with a letter, not be a time, and not be part of a sentence
         var at = line.slice(f.at).match(/@\s*([^(|]+?)(?:\s*\(|\s+-\s|\s*\||\s+\d{3,4}\s*-|$)/);
         if (at) {
@@ -722,6 +725,12 @@
         out.push(entry);
       }
     }
+    // a day the page labels itself ("12 Oct 2026 (Fitting)") wins over other readings of that
+    // day in the description ("Week 12th October" near "Filming Dates")
+    var sureDay = {};
+    out.forEach(function (e) { if (e.sure) sureDay[e.d] = true; });
+    out = out.filter(function (e) { return e.sure || !sureDay[e.d]; });
+    out.forEach(function (e) { delete e.sure; });
     out.sort(function (a, b) { return a.d < b.d ? -1 : a.d > b.d ? 1 : 0; });
     return out;
   }
