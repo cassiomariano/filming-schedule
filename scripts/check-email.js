@@ -264,8 +264,8 @@ function matchJob(kind, r, links, received, statuses) {
   const agencyKnown = !!canonAgency(r.agency);
   const sameAg = c => !agencyKnown || !canonAgency(c.agency) || sameAgency(c.agency, r.agency);
   const listed = new Set((r.dates || []).map(x => x.d));
-  const ep = portalLink({ links: (links || []).filter(l => l.kind === "respond") });
-  if (ep) { const byPage = pool.filter(c => portalLink(c) === ep); if (byPage.length) return { job: pickOne(byPage) }; }
+  const mail = { links: (links || []).filter(l => l.kind === "respond") };
+  if (epLinks(mail).length) { const byPage = pool.filter(c => sharesPage(c, mail)); if (byPage.length) return { job: pickOne(byPage) }; }
   if (r.project) {
     const named = existingCalls.filter(c => c.id && c.project && closeName(c.project, r.project) && sameAg(c));
     if (named.length) {
@@ -335,7 +335,7 @@ async function applyStatusEmail(kind, r, subject, received, skipId, links, sourc
   if (kind === "released" && listed.size && (c.dates || []).some(e => !listed.has(e.d))) {
     const dates = c.dates.map(e => ({ ...e }));
     let hit = false;
-    dates.forEach(e => { if (listed.has(e.d) && e.state !== "released") { e.state = "released"; hit = true; } });
+    dates.forEach(e => { if (listed.has(e.d) && e.state !== "released") { e.state = "released"; e.releasedAt = String(received || "").slice(0, 10); hit = true; } });
     // every day released or canceled → the whole job is released
     const allOff = dates.every(e => ["released", "canceled"].includes(e.state));
     if (hit || allOff) {
@@ -404,9 +404,8 @@ function closeInTime(a, b) {
 const ACTIVE = ["pending", "available", "confirmed"];
 // the call this new email belongs to: same EP message, or same production + agency at around the same time
 function findTwin(call) {
-  const ep = portalLink(call);                     // the same EP message page = the same job
-  if (ep) {
-    const byPage = existingCalls.filter(c => c.id && portalLink(c) === ep);
+  if (epLinks(call).length) {                      // the same EP message page = the same job
+    const byPage = existingCalls.filter(c => c.id && sharesPage(c, call));
     if (byPage.length) return pickOne(byPage);
   }
   if (!call.project) return null;
@@ -632,10 +631,16 @@ function tickedAnswers(text, parse) {
   return out;
 }
 const portal = { read: 0, failed: 0, login: 0, answered: 0, recorded: 0, radios: 0, ticked: 0, scripts: 0, dated: 0 };
+// every EP message page a job (or an email) links to
+function epLinks(c) {
+  return (c.links || []).filter(x => x.kind === "respond" && /^https:\/\/[a-z0-9.-]*epcastingportal\.com\/./i.test(x.url)).map(x => x.url);
+}
+function sharesPage(a, b) { const s = new Set(epLinks(a)); return epLinks(b).some(u => s.has(u)); }
 function portalLink(c) {
   // the NEWEST EP page (a later request for the same job adds its link at the end)
-  const eps = (c.links || []).filter(x => x.kind === "respond" && /^https:\/\/[a-z0-9.-]*epcastingportal\.com\//i.test(x.url));
-  return eps.length ? eps[eps.length - 1].url : null;
+  // (a bare "epcastingportal.com" address is the home page, not a message)
+  const eps = epLinks(c);
+  return eps.length ? eps[eps.length - 1] : null;
 }
 async function fetchPortalPage(url) {
   try {
@@ -674,8 +679,15 @@ async function enrichFromPortal(call) {
   // New days are only added to a new or unanswered job (so days you deleted don't come back).
   // The page's day type (fitting / rehearsal / shoot) is more reliable than the email's.
   const mayAdd = !call.id || call.status === "pending" || call.status === "available";
+  // the newest enquiry's date (its page is the one read): days released BEFORE it and listed again
+  // on it are asked for again (e.g. a new role on the same days), so they're open again
+  const askedOn = (call.emails || []).filter(e => e.kind === "call").map(e => e.date).sort().pop() || "";
   r.dates.forEach(x => {
     const have = dates.find(e => sameDay(e, x));
+    if (have && have.state === "released" && have.releasedAt && askedOn && have.releasedAt < askedOn &&
+        ["pending", "available"].includes(call.status) && !/not (been )?selected|no longer (needed|required)|released|cancel+ed/i.test(text.slice(0, 600))) {
+      delete have.state; delete have.releasedAt; delete have.answer;
+    }
     if (!have) { if (mayAdd) dates.push({ d: x.d, kind: x.kind, ...(x.loc ? { loc: x.loc } : {}), ...(x.night ? { night: true } : {}) }); }
     else { if (!have.loc && x.loc) have.loc = x.loc; if (x.kind && x.kind !== have.kind && !have.state) have.kind = x.kind; }
   });
