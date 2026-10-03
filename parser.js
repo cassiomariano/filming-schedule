@@ -373,7 +373,7 @@
     if (!looksLikeAv && saysReleased(top, BODY_RELEASE, true)) return "released";
     // the agency confirming YOUR reply ("Thank you for letting us know that you are available")
     if (/thank you for (letting us know|responding|your (response|reply)|being (un)?available|confirming)/i.test(subj)) return "replied";
-    if (/\bthank(s| you)\b|review|invit|newsletter|survey|payment|invoice/i.test(subj)) return null;
+    if (/\bthank(s| you)\b|review|invit|newsletter|survey|payment|invoice|check-?in\b/i.test(subj)) return null;
     if (isAvailabilityCheck(subj, text)) return "call";
     // requests for new photos / headshots / profile updates are not jobs
     if (/photo|headshot|selfie|profile|update your|measurements/i.test(subj)) return null;
@@ -547,6 +547,8 @@
       // the reply deadline on the line after "Please respond before:" is not a work day
       var prev = (all[i - 1] || "") || (all[i - 2] || "");
       if (i > 0 && /(respond|reply) before:?\s*$|deadline:?\s*$|expires?:?\s*$/i.test(prev)) continue;
+      // "Please respond as soon as possible / (and by Today, Tuesday 29 Sep 23:59 the latest)": the reply deadline
+      if (i > 0 && (/^\W*and by\b/i.test(line) || /\b(at )?the latest\b/i.test(line) && /\bby\b/i.test(line))) continue;
       // EP pages put "(Rehearsals in Epsom)" on the line under the date: read them together.
       // The word in brackets decides the kind of day, before any heading.
       // (pages often leave a blank line between the date and the bracket)

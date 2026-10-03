@@ -12,7 +12,7 @@
 (function (root) {
   "use strict";
   var P = typeof module !== "undefined" && module.exports ? require("./parser.js") : root.EmailParser;
-  var VERSION = 1;
+  var VERSION = 2;          // goes up when the rules change: emails the robot read are read again with the new rules
 
   // ---------- small helpers ----------
   function addDays(d, n) { var t = new Date(d + "T12:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); }
@@ -270,7 +270,7 @@
     var base = job.base || {};
     var pages = job.pages || {};
     var mine = job.mine || {};
-    var all = (records || []).filter(function (r) { return r.kind && r.kind !== "epupdate"; }).slice().sort(byTime);
+    var all = (records || []).filter(function (r) { return r.kind && r.kind !== "epupdate" && !r.copyOf; }).slice().sort(byTime);
     // base.at: the job's days and status were saved as they stood at that moment (e.g. when the robot
     // was rebuilt): only emails after it change them. Older emails stay listed on the job.
     // An email found only after the job was saved (e.g. one the robot had missed) counts only when it is
@@ -282,7 +282,7 @@
     var recs = base.at ? all.filter(function (r) {
       if (String(r.at) > base.at) return true;
       if (!(String(r.seen || "") > base.at)) return false;
-      if (String(r.at) > lastKnown) return true;
+      if (dayOf(r.at) > dayOf(lastKnown)) return true;
       late.push(r); return false;
     }) : all;
     var days = {};

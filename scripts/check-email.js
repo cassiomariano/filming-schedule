@@ -201,7 +201,9 @@ async function download(client, account, ai, list, counts) {
         if (!rec.kind && pdfs.some(p => /call ?sheet|callsheet/i.test(p.name))) rec.kind = "calltime";
       }
     }
-    if (!rec.kind && !x.agency) continue;              // not a job email from an unknown sender: not kept
+    // from a sender that isn't an agency, only call sheets and availability requests are kept
+    // (a hotel or flight "booking confirmation" is not a job)
+    if (!x.agency && !["calltime", "call"].includes(rec.kind)) continue;
     out.push(rec);
     counts.newRecords++;
   }
@@ -268,6 +270,18 @@ async function fileRecord(rec, fresh) {
     stats.other++;
     return;
   }
+  // the same email a second time (e.g. a copy in the other inbox): listed on the same job, never applied twice
+  if (!rec.copyOf) {
+    const same = await db.collection("records").where("subject", "==", rec.subject).get();
+    const orig = same.docs.map(d => d.data()).find(o => isCopy(o, rec) && String(o.seen || o.at) <= String(rec.seen || nowIso()));
+    if (orig) {
+      rec.copyOf = orig.key;
+      await ref.set({ ...clean(rec), job: orig.job || null, state: orig.job ? "filed" : "other", how: "copy of an email already on file", why: "", candidates: [], filedAt: nowIso() }, { merge: true });
+      if (orig.job) await db.collection("calls").doc(orig.job).update({ records: FieldValue.arrayUnion(rec.key) }).catch(() => {});
+      stats.other++;
+      return;
+    }
+  }
   // a new request: read its EP page first (the real name, every date and your ticks)
   let facts = null;
   if (rec.kind === "call" && rec.pages && rec.pages.length) {
@@ -289,6 +303,12 @@ async function fileRecord(rec, fresh) {
     stats.filed++;
     return;
   }
+  // an email more than 30 days old (found late, e.g. moved into a folder) never starts a new job
+  if (!m.job && m.sure && Date.now() - new Date(rec.at).getTime() > 30 * 864e5) {
+    await ref.set({ ...clean(rec), job: null, state: "ignored", how: m.how, why: "An old email (more than 30 days) – not added as a new job", candidates: [], filedAt: nowIso() }, { merge: true });
+    stats.ignored++;
+    return;
+  }
   if (!m.job && m.sure) {
     // a new job
     const id = "e" + rec.key;
@@ -307,6 +327,9 @@ async function fileRecord(rec, fresh) {
   if (state === "check") stats.check++; else stats.ignored++;
 }
 // "seen": when the robot first saw the email (an email seen after a job was saved still counts, even if it is dated earlier)
+// the same email twice: same subject, same text, sent within 4 days (two releases on different days differ in their text)
+const textStart = r => String(r.text || "").replace(/\s+/g, " ").trim().slice(0, 400);
+function isCopy(a, b) { return a.key !== b.key && a.subject === b.subject && textStart(a) === textStart(b) && Math.abs(new Date(a.at) - new Date(b.at)) <= 4 * 864e5; }
 function clean(rec) { const { allUrls: _a, knownAgencies: _k, ...r } = rec; r.seen = r.seen || nowIso(); return JSON.parse(JSON.stringify(r)); }
 
 // the Check list (and emails you moved in the app) is tried again on every run
@@ -405,9 +428,13 @@ async function dailyCheck() {
     out.missing = r.records.length;
     for (const rec of r.records) await fileRecord(rec, false);
   }
-  // 2) every job comes out the same when rebuilt from scratch (fixes any that don't)
-  const calls = (await db.collection("calls").get()).docs;
-  const recs = (await db.collection("records").get()).docs.map(d => d.data());
+  // 2) upkeep: emails the robot read itself are read again when the rules improved; copies are marked;
+  //    jobs made only from old emails (found late) are removed
+  let calls = (await db.collection("calls").get()).docs;
+  let recs = (await db.collection("records").get()).docs.map(d => d.data());
+  out.upkeep = await upkeep(calls, recs);
+  if (out.upkeep.changed) { calls = (await db.collection("calls").get()).docs; recs = (await db.collection("records").get()).docs.map(d => d.data()); }
+  // 3) every job comes out the same when rebuilt from scratch (fixes any that don't)
   const byJob = {};
   recs.forEach(r => { if (r.job) (byJob[r.job] = byJob[r.job] || []).push(r); if (r.state === "check") out.check++; });
   INDEX = {};
@@ -418,7 +445,7 @@ async function dailyCheck() {
     if (differs) { out.rebuiltDiffer++; await deriveAndSave(doc.id, null, true); }
     else setIndex(doc.id, { ...job, recordDates: (byJob[doc.id] || []).map(r => String(r.at).slice(0, 10)), pageCodes: (byJob[doc.id] || []).flatMap(r => r.pages || []) });
   }
-  // 3) jobs that look like copies of each other (same production + agency + time): offered to you in the Check list
+  // 4) jobs that look like copies of each other (same production + agency + time): offered to you in the Check list
   const dismissed = new Set(((await db.collection("meta").doc("duplicates").get()).data() || {}).dismissed || []);
   const list = calls.map(d => ({ id: d.id, ...d.data() }));
   const pairs = [];
@@ -433,6 +460,55 @@ async function dailyCheck() {
   out.duplicates = pairs.length;
   await db.collection("meta").doc("duplicates").set({ pairs, dismissed: [...dismissed], at: nowIso() });
   return out;
+}
+
+async function upkeep(calls, recs) {
+  const res = { reread: 0, copies: 0, removed: 0, changed: 0 };
+  const touched = new Set();
+  // a) read again with the current rules (only emails the robot read itself: their full text is stored)
+  for (const r of recs.filter(r => r.account && (r.v || 1) < Core.VERSION)) {
+    const again = Core.recordFromEmail({ key: r.key, at: r.at, account: r.account, folder: r.folder, from: r.from, subject: r.subject, text: r.text,
+      links: r.links, messageId: r.messageId, knownAgencies: knownAgencyNames() });
+    const ch = { v: Core.VERSION, parsed: JSON.parse(JSON.stringify(again.parsed)) };
+    if (again.kind !== r.kind && r.via !== "EP page") ch.kind = again.kind;
+    const kind = "kind" in ch ? ch.kind : r.kind;
+    // not from an agency and not a call sheet / request (e.g. a hotel or flight booking): not a job email
+    if (!again.fromAgency && !["calltime", "call"].includes(kind)) { ch.state = "ignored"; ch.why = "Not from an agency"; ch.job = null; if (r.job) touched.add(r.job); }
+    else if (kind === null && r.job) { ch.state = "other"; ch.why = "Not a job email (read again with improved rules)"; ch.job = null; touched.add(r.job); }
+    else if (r.job) touched.add(r.job);
+    await db.collection("records").doc(r.key).update(ch);
+    Object.assign(r, ch); res.reread++;
+  }
+  // b) copies: the later-seen one never counts
+  const bySubject = {};
+  recs.forEach(r => (bySubject[r.subject] = bySubject[r.subject] || []).push(r));
+  for (const list of Object.values(bySubject)) {
+    if (list.length < 2) continue;
+    list.sort((a, b) => String(a.seen || a.at).localeCompare(String(b.seen || b.at)));
+    for (let i = 1; i < list.length; i++) {
+      const r = list[i];
+      if (r.copyOf || !r.account) continue;
+      const orig = list.slice(0, i).find(o => !o.copyOf && isCopy(o, r));
+      if (!orig) continue;
+      await db.collection("records").doc(r.key).update({ copyOf: orig.key, how: "copy of an email already on file" });
+      r.copyOf = orig.key; res.copies++;
+      if (r.job) touched.add(r.job);
+    }
+  }
+  // c) a job the robot made only from emails that were already old when found (e.g. moved into a folder)
+  for (const doc of calls) {
+    const j = doc.data();
+    if (j.base && j.base.at) continue;                       // your jobs and jobs saved at the switch are never removed this way
+    if (j.mine && Object.keys(j.mine).length) continue;      // you changed it: it stays
+    const mine = recs.filter(r => r.job === doc.id);
+    if (!mine.length || !mine.every(r => new Date(r.seen || r.at) - new Date(r.at) > 30 * 864e5)) continue;
+    for (const r of mine) await db.collection("records").doc(r.key).update({ job: null, state: "ignored", why: "An old email (more than 30 days) – not added as a new job" });
+    await doc.ref.delete();
+    delete INDEX[doc.id]; indexDirty = true; touched.delete(doc.id); res.removed++;
+  }
+  for (const id of touched) { await deriveAndSave(id, null, true); }
+  res.changed = res.reread + res.copies + res.removed;
+  return res;
 }
 
 // ---------- health (the chip in the app) + the morning summary ----------
@@ -559,6 +635,7 @@ async function writeAll(coll, items, idOf) {
   try { await weeklyBackup(); } catch (e) { report("warning", "Backup", "Backup failed (" + (e.code || e.name) + ")."); }
   report("notice", "Result", `Filed ${stats.filed} emails on jobs, ${stats.newJobs} new jobs, ${stats.check} to your Check list, ${stats.ignored} ignored, ${stats.other} not job emails.` +
     (portal.read + portal.failed + portal.login ? ` EP pages: ${portal.read} read` + (portal.failed ? `, ${portal.failed} failed` : "") + (portal.login ? `, ${portal.login} need a login` : "") + "." : "") +
-    (check ? ` Self-check: ${check.missing} missed emails added, ${check.rebuiltDiffer} jobs corrected, ${check.check} in the Check list, ${check.duplicates} possible copies.` : ""));
+    (check ? ` Self-check: ${check.missing} missed emails added, ${check.rebuiltDiffer} jobs corrected, ${check.check} in the Check list, ${check.duplicates} possible copies.` +
+      (check.upkeep ? ` Upkeep: ${check.upkeep.reread} emails read again with the improved rules, ${check.upkeep.copies} copies marked, ${check.upkeep.removed} jobs from old emails removed.` : "") : ""));
   process.exit(failed ? 1 : 0);
 })().catch(e => { report("error", "Robot", "Stopped: " + (e.code || e.name || "error") + " " + String(e.message || "").slice(0, 120).replace(/[\w.+-]+@[\w.-]+/g, "…")); process.exit(1); });
