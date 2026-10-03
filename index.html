@@ -1482,7 +1482,7 @@ function legacyPayments(c){
 
 /* ---------- add payments: remittance PDFs, the EP payments page, or any remittance / invoice text ---------- */
 let remit = null;
-const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+const PDFJS = "vendor/pdfjs/";          // the PDF reader (Mozilla pdf.js), kept inside the app
 async function loadPdfJs(){
   if (window.pdfjsLib) return window.pdfjsLib;
   await new Promise((ok, no) => { const sc = document.createElement("script"); sc.src = PDFJS + "pdf.min.js"; sc.onload = ok; sc.onerror = no; document.head.appendChild(sc); });
@@ -1501,7 +1501,7 @@ async function pdfText(file){
   return Money.layoutText(pages);
 }
 function openRemit(forId){
-  remit = {forId: forId || "", text: "", list: null, busy: false};
+  remit = {forId: forId || "", text: "", list: null, busy: false, files: [], log: [], progress: ""};
   drawRemit();
 }
 function remitJobs(){ return moneyJobs().map(j => ({id: j.c.id, name: nameOf(j.c), agency: j.c.agency || "", worked: j.worked, j})); }
@@ -1510,14 +1510,17 @@ function drawRemit(){
   const list = remit.list;
   const opts = sel => `<option value="new"${sel === "new" ? " selected" : ""}>➕ Add it as a new worked job</option><option value="skip"${sel === "skip" ? " selected" : ""}>Don't save this one</option>
     ${jobs.map(x => `<option value="${x.id}"${x.id === sel ? " selected" : ""}>${esc(x.name)} · ${esc(x.agency)} · ${esc(fmtDM(x.worked[x.worked.length - 1]))}</option>`).join("")}`;
+  const chosen = remit.files.length ? `<p class="src" style="margin:4px 0 0">${remit.files.length} file${remit.files.length === 1 ? "" : "s"} chosen: ${esc(remit.files.map(f => f.name).join(", "))}</p>` : "";
   let body = `<p class="src" style="margin:0">Best: the remittance PDFs (they give each day's breakdown) and the table from the same payments page (it gives the date the money reached your bank). Nothing personal from them is kept – only the figures.</p>
     <div class="fld"><span class="lbl">Remittance PDFs (from your EP payments page – several at once is fine)</span>
-      <input class="inp" type="file" id="rm-pdf" accept="application/pdf,.pdf" multiple></div>
+      <input class="inp" type="file" id="rm-pdf" accept="application/pdf,.pdf" multiple ${remit.busy ? "disabled" : ""}>${chosen}</div>
     <div class="fld"><label for="rm-text">…or paste: the table from your EP payments page (select all its rows and copy), or a remittance / invoice text</label>
       <textarea class="inp" id="rm-text" rows="6" placeholder="Project Name  Status  Remittance Advice  Deposit Date  Days Worked  Gross  Fees  VAT  Deposited…">${esc(remit.text)}</textarea></div>
-    <div><button class="btn primary small" data-remitread ${remit.busy ? "disabled" : ""}>${remit.busy ? "Reading…" : "Read them"}</button></div>`;
+    <div><button class="btn primary small" data-remitread ${remit.busy ? "disabled" : ""}>${remit.busy ? "Reading… " + esc(remit.progress) : "Read them"}</button></div>
+    ${remit.log.length ? `<ul class="checks">${remit.log.map(l => `<li class="${l.ok ? "ok" : "bad"}">${l.ok ? "✓" : "⚠"} ${esc(l.what)}</li>`).join("")}</ul>` : ""}`;
   if (list){
-    body += `<p style="margin:0"><b>Found ${list.length} payment${list.length === 1 ? "" : "s"}.</b> Check the job each one goes to, then save.</p>`;
+    body += list.length ? `<p style="margin:0"><b>Found ${list.length} payment${list.length === 1 ? "" : "s"}.</b> Check the job each one goes to, then save.</p>`
+      : `<p style="margin:0"><b>No payments found.</b> See the notes above for each file.</p>`;
     body += list.map((p, i) => {
       const x = jobs.find(y => y.id === p.target);
       const checks = Money.checkPayment(p, x ? x.j.fees : agencyFees(p.agency), x ? x.worked : p.days, x ? x.j.rate : null);
@@ -1538,23 +1541,43 @@ function drawRemit(){
   </aside>`;
 }
 async function readRemitNow(){
-  const files = [...($("#rm-pdf", layer)?.files || [])];
+  const picked = [...($("#rm-pdf", layer)?.files || [])];
+  if (picked.length) remit.files = picked;                  // kept, so redrawing the sheet doesn't lose them
   remit.text = $("#rm-text", layer).value;
-  if (!files.length && !remit.text.trim()){ toast("Choose the PDFs or paste the table first"); return; }
-  remit.busy = true; drawRemit();
+  if (!remit.files.length && !remit.text.trim()){ toast("Choose the PDFs or paste the table first"); return; }
+  remit.busy = true; remit.log = []; remit.list = null;
+  const jobs = remitJobs();
+  let list = [];
   try {
-    const texts = [];
-    for (const f of files){ try { texts.push(await pdfText(f)); } catch (e) { toast("Couldn't read " + f.name); } }
-    const jobs = remitJobs();
-    let list = [];
-    texts.forEach(t => { list = list.concat(Money.readPayments(t, jobs, TODAY)); });
-    if (remit.text.trim()) list = list.concat(Money.readPayments(remit.text, jobs, TODAY).map(p => p.source === "text" ? {...p, text: Money.redact(remit.text).slice(0, 6000)} : p));
+    for (let k = 0; k < remit.files.length; k++){
+      const f = remit.files[k];
+      remit.progress = `${k + 1} of ${remit.files.length}`; drawRemit();
+      try {
+        const found = Money.readPayments(await pdfText(f), jobs, TODAY);
+        const real = found.filter(p => p.net !== null || p.gross !== null);
+        remit.log.push(real.length ? {ok: true, what: `${f.name}: ${real.map(p => `${p.project || "payment"} ${p.net !== null ? money(p.net) : ""}`).join(", ")}`}
+          : {ok: false, what: `${f.name}: no payment found in it (is it a remittance?)`});
+        list = list.concat(real);
+      } catch (e) {
+        remit.log.push({ok: false, what: `${f.name}: couldn't be read (${e && e.message ? e.message : "unknown error"})`});
+      }
+    }
+    if (remit.text.trim()){
+      try {
+        const found = Money.readPayments(remit.text, jobs, TODAY).filter(p => p.net !== null || p.gross !== null).map(p => p.source === "text" ? {...p, text: Money.redact(remit.text).slice(0, 6000)} : p);
+        remit.log.push(found.length ? {ok: true, what: `Pasted text: ${found.length} payment${found.length === 1 ? "" : "s"}`} : {ok: false, what: "Pasted text: no payment found in it"});
+        list = list.concat(found);
+      } catch (e) { remit.log.push({ok: false, what: "Pasted text couldn't be read (" + (e && e.message || "error") + ")"}); }
+    }
     // the same payment from its PDF and from the payments page: one, with the most of both
     const merged = [];
     list.forEach(p => { const m = merged.findIndex(q => Money.samePayment(q, p)); if (m === -1) merged.push(p); else merged[m] = Money.mergePayment(merged[m], p); });
+    merged.sort((a, b) => String(a.days[0] || a.paidOn || "").localeCompare(String(b.days[0] || b.paidOn || "")));
     merged.forEach(p => { p.target = p.job || (remit.forId && merged.length === 1 ? remit.forId : "new"); });
     remit.list = merged;
-  } finally { remit.busy = false; }
+  } catch (e) {
+    remit.log.push({ok: false, what: "Something went wrong: " + (e && e.message || e)});
+  } finally { remit.busy = false; remit.progress = ""; }
   drawRemit();
 }
 /* your corrections (amounts typed, job chosen) count before saving */

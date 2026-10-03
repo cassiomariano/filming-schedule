@@ -1,7 +1,7 @@
 /* Service worker: keeps the app itself on the phone so it opens (even offline).
    Your calls are NOT stored here – Firebase keeps its own offline copy.
    Change VERSION when you change the list below, so phones drop the old copies. */
-const VERSION = "fs-shell-v3";
+const VERSION = "fs-shell-v4";
 const SHELL = ["./", "index.html", "parser.js", "money.js", "firebase-config.js", "manifest.webmanifest", "icon-180.png", "icon.svg"];
 
 // install: save the app files (one missing file doesn't stop the others)
