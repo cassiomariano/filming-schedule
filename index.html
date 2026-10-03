@@ -454,6 +454,20 @@ details.more summary{cursor:pointer;font-weight:600;display:flex;gap:8px;align-i
   main{padding-bottom:calc(88px + env(safe-area-inset-bottom,0px))}
   .toast{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
 }
+.three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.dlist{display:flex;flex-direction:column;gap:10px}
+.dcard{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.dtop{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap}
+.dname{flex:1;min-width:0;text-align:left;background:none;border:0;padding:0;cursor:pointer;color:inherit;font:inherit;display:flex;flex-direction:column}
+.dname small{color:var(--muted)}
+.ddays{display:flex;flex-wrap:wrap;gap:4px}
+.dnums{display:flex;flex-wrap:wrap;gap:4px 16px;align-items:baseline}
+.dbtns{display:flex;flex-wrap:wrap;gap:6px}
+.paybox{border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:4px;margin-bottom:6px}
+.paytop{display:flex;align-items:center;gap:6px}
+.payamts{display:flex;flex-wrap:wrap;gap:4px 12px;font-variant-numeric:tabular-nums}
+.checks{list-style:none;margin:0;padding:0;font-size:13px}
+.checks .ok{color:var(--muted)} .checks .bad{color:var(--attn);font-weight:600}
 .alert.check{border-left-color:var(--s-available, #d9a400)}
 .chk{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:flex-start;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line, #e5e5e5)}
 .chk:first-child{border-top:0}
@@ -477,6 +491,7 @@ details.more summary{cursor:pointer;font-weight:600;display:flex;gap:8px;align-i
     <nav class="tabs" role="tablist">
       <button class="tab" role="tab" data-tab="calendar" aria-selected="true"><span class="ti" aria-hidden="true">▦</span>Calendar</button>
       <button class="tab" role="tab" data-tab="booked" aria-selected="false"><span class="ti" aria-hidden="true">✓</span>Booked <span class="count" id="bookedCount" hidden></span></button>
+      <button class="tab" role="tab" data-tab="done" aria-selected="false"><span class="ti" aria-hidden="true">✔</span>Done <span class="count" id="doneCount" hidden></span></button>
       <button class="tab" role="tab" data-tab="calls" aria-selected="false"><span class="ti" aria-hidden="true">✉</span>Calls <span class="count" id="replyCount" hidden></span></button>
       <button class="tab" role="tab" data-tab="stats" aria-selected="false"><span class="ti" aria-hidden="true">▤</span>Stats</button>
       <button class="tab" role="tab" data-tab="money" aria-selected="false"><span class="ti" aria-hidden="true">£</span>Money</button>
@@ -499,6 +514,7 @@ details.more summary{cursor:pointer;font-weight:600;display:flex;gap:8px;align-i
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js"></script>
 <script src="parser.js"></script>
+<script src="money.js"></script>
 <script>
 (() => {
 "use strict";
@@ -687,7 +703,8 @@ function clashes(idx){
 /* ================= rendering ================= */
 const main = $("#main");
 /* re-tidy every call from the raw database copy (needed when the day changes) */
-function retidy(){ S.calls = new Map([...(S.raw || new Map())].map(([id, d]) => [id, tidy({id, ...d})])); }
+function retidy(){ agencyFeesCache = null; retidy2(); }
+function retidy2(){ S.calls = new Map([...(S.raw || new Map())].map(([id, d]) => [id, tidy({id, ...d})])); }
 function render(){
   const t = key(new Date());
   if (t !== TODAY){ TODAY = t; retidy(); }              // midnight passed while the app was open
@@ -696,10 +713,12 @@ function render(){
   const rc = $("#replyCount"); rc.hidden = !needReply; rc.textContent = needReply; rc.className = "count hot";
   if (!S.loaded) return;
   const bc = $("#bookedCount"); const nb = bookedJobs(false).length; bc.hidden = !nb; bc.textContent = nb;
+  const dc = $("#doneCount"); const nd = moneyJobs().filter(j => j.owed > 0 || j.bad).length; dc.hidden = !nd; dc.textContent = nd;
   if (S.tab === "calendar") renderCalendar();
   else if (S.tab === "booked") renderBooked();
   else if (S.tab === "calls") renderCalls();
   else if (S.tab === "money") renderMoney();
+  else if (S.tab === "done") renderDone();
   else renderStats();
 }
 
@@ -1180,13 +1199,41 @@ function rateGuess(text){
   return m ? Number(m[1]) : null;
 }
 const OVERDUE_DAYS = 45;
-const PAY_CHIP = {paid:["Paid","s-confirmed"], part:["Part paid","s-available"], unpaid:["Unpaid","s-canceled"], overdue:["Overdue","pay-over"]};
+const PAY_CHIP = {paid:["Paid","s-confirmed"], part:["Part paid","s-available"], invoiced:["Invoiced","s-available"], unpaid:["Unpaid","s-canceled"], overdue:["Overdue","pay-over"]};
 /* UK tax year: 6 April to 5 April. Gives {from, to, label} for the year that holds day k */
 function taxYear(k){
   const y = Number(k.slice(0, 4));
   const start = k >= `${y}-04-06` ? y : y - 1;
   return {from:`${start}-04-06`, to:`${start + 1}-04-05`, label:`${start}/${String(start + 1).slice(2)}`};
 }
+/* the fees for a job: what you typed, else what its emails / call sheet say ("10% commission plus VAT…") */
+/* the fees for a job, in this order: what you typed · what its emails say · what its remittance shows ·
+   what this agency usually states in its other emails. "from" says which. */
+let agencyFeesCache = null;
+function agencyFees(agency){
+  if (!agencyFeesCache){
+    const count = new Map();
+    callList().forEach(c => { const f = Money.feesFrom((c.emails || []).map(e => e.text).join("\n")); if (!f) return;
+      const k = agencyKeyOf(c.agency), sig = JSON.stringify(f); const m = count.get(k) || new Map(); m.set(sig, (m.get(sig) || 0) + 1); count.set(k, m); });
+    agencyFeesCache = new Map([...count].map(([k, m]) => [k, JSON.parse([...m].sort((a, b) => b[1] - a[1])[0][0])]));
+  }
+  return agencyFeesCache.get(agencyKeyOf(agency)) || null;
+}
+function jobFees(c){
+  const p = c.pay || {};
+  if (p.fees) return {...p.fees, from: "you"};
+  const own = Money.feesFrom([c.rate, c.notes, ...(c.emails || []).map(e => e.text)].join("\n"));
+  if (own) return {...own, from: "emails"};
+  const r = (p.payments || []).filter(x => x.gross && (x.commission !== null || x.ep !== null)).pop();
+  if (r){
+    const pc = v => Math.round((v || 0) / r.gross * 1000) / 10, fee = (r.commission || 0) + (r.ep || 0);
+    return {agency: pc(r.commission), ep: pc(r.ep), vat: fee && r.vat ? Math.round(r.vat / fee * 100) : 20, plusVat: !!r.vat, from: "remittance"};
+  }
+  const ag = agencyFees(c.agency);
+  return ag ? {...ag, from: "agency"} : null;
+}
+const FEES_FROM = {you: "typed by you", emails: "from the job's emails", remittance: "from its remittance", agency: "usual for this agency"};
+const feesText = f => !f ? "Fees not found in the emails" : `${f.agency}% agency${f.ep ? ` + ${f.ep}% EP fee` : ""}${f.plusVat ? ` + ${f.vat}% VAT` : ""}${f.from ? ` (${FEES_FROM[f.from]})` : ""}`;
 /* one entry per job with worked days (blue "done" days), newest first */
 function moneyJobs(){
   const jobs = [];
@@ -1198,15 +1245,23 @@ function moneyJobs(){
     const guess = savedRate === null ? rateGuess(c.rate) : null;   // shown as an estimate
     const rate = savedRate ?? guess;
     const extras = numOrNull(p.extras) || 0;
-    const paid = numOrNull(p.paid) || 0;
-    const expected = (rate || 0) * worked.length + extras;
+    const all = Array.isArray(p.payments) ? p.payments : [];
+    const pays = all.filter(x => x.kind !== "invoice"), invoices = all.filter(x => x.kind === "invoice");
+    const paid = pays.length ? pays.reduce((s, x) => s + (x.net || 0), 0) : (numOrNull(p.paid) || 0);
+    const paidOn = pays.length ? pays.map(x => x.paidOn || "").sort().pop() : (p.paidOn || "");
+    const fees = jobFees(c);
+    // what you earn before fees: day rate × days + extras (no rate: the gross on the remittances)
+    const gross = rate !== null ? rate * worked.length + extras : (pays.reduce((s, x) => s + (x.gross || 0), 0) || extras);
+    const expected = fees ? Money.expectedNet(gross, fees).net : gross;    // what should reach your bank
+    const bad = all.some(x => (x.checks || []).some(k => !k.ok));
     const last = worked[worked.length - 1];
     const ago = Math.round((parse(TODAY) - parse(last)) / 864e5);
     let status = "unpaid";
-    if (paid > 0 && paid >= expected - 0.005) status = "paid";
+    if (paid > 0 && paid >= expected - 0.02) status = "paid";
     else if (paid > 0) status = "part";
+    else if (invoices.length) status = "invoiced";
     else if (ago > OVERDUE_DAYS) status = "overdue";
-    jobs.push({c, worked, last, rate, estimate: guess !== null, extras, paid, paidOn: p.paidOn || "", note: p.note || "", expected, status,
+    jobs.push({c, worked, last, rate, estimate: guess !== null, extras, paid, paidOn, note: p.note || "", gross, fees, expected, status, bad, payments: all,
       owed: status === "paid" ? 0 : Math.max(0, expected - paid)});
   }
   return jobs.sort((a, b) => b.last.localeCompare(a.last) || nameOf(a.c).localeCompare(nameOf(b.c)));
@@ -1263,7 +1318,7 @@ function renderMoney(){
     <div class="mtable"><div class="mhead"><span>Production</span><span>Days worked</span><span class="num">Day rate</span><span class="num">Expected</span><span class="num">Paid</span><span class="num">Status</span></div>
     ${list.map(moneyRowHTML).join("")}</div>`;
   }
-  h += `<p class="src" style="margin:0">Expected = day rate × days worked + extras (overtime, travel, fittings…). Tap a job to add its rate or what you've been paid. Grey rates are guesses from the call's rate text.</p>`;
+  h += `<p class="src" style="margin:0">Expected = day rate × days worked + extras, minus the agency commission, EP fee and VAT the job's emails state (what should reach your bank). Tap a job to add its rate or a payment; paste remittances in the Done tab. Grey rates are guesses from the call's rate text.</p>`;
   main.innerHTML = h;
 }
 function moneyRowHTML(j){
@@ -1274,9 +1329,9 @@ function moneyRowHTML(j){
     <span class="prod"><b>${esc(nameOf(j.c))}</b><small>${esc(j.c.agency || "No agency")}${j.note ? " · " + esc(j.note) : ""}</small></span>
     <span class="mdays">${j.worked.length} day${j.worked.length===1?"":"s"}<small>${esc(days.slice(0, 8).join(", "))}${days.length > 8 ? ` +${days.length - 8} more` : ""}</small></span>
     <span class="mnums"><span class="num">${rate}<small>day rate</small></span>
-    <span class="num">${money(j.expected)}<small>${j.extras ? "incl. " + money(j.extras) + " extras" : "expected"}</small></span>
+    <span class="num">${money(j.expected)}<small>${j.fees ? "net · gross " + money(j.gross) : (j.extras ? "incl. " + money(j.extras) + " extras" : "expected")}</small></span>
     <span class="num">${money(j.paid)}<small>${j.paidOn ? "on " + esc(fmtDM(j.paidOn)) : "paid"}</small></span></span>
-    <span class="pill ${cls}">${chip}</span>
+    <span class="pill ${cls}">${chip}</span>${j.bad ? `<span class="pill pay-over" title="A payment didn't pass its checks">⚠ check</span>` : ""}
   </button>`;
 }
 
@@ -1295,41 +1350,187 @@ function openPay(id){
       ${j.c.rate ? `<p class="src" style="margin:0">Rate on the call: ${esc(j.c.rate)}</p>` : ""}
       <div class="two">${box("rate", "Day rate (£)", numOrNull(p.rate), guess !== null ? `placeholder="${guess} (from the call)"` : `placeholder="e.g. 110"`)}
       ${box("extras", "Extras (£) – overtime, travel…", numOrNull(p.extras), `placeholder="0"`)}</div>
-      <div class="two">${box("paid", "Amount paid (£)", numOrNull(p.paid), `placeholder="0"`)}
-      <div class="fld"><label for="p-on">Paid on</label><input class="inp" id="p-on" type="date" value="${esc(p.paidOn || "")}"></div></div>
+      <div class="three">${box("fa", "Agency commission %", j.fees ? j.fees.agency : "", "placeholder=\"e.g. 10\"")}${box("fe", "EP admin fee %", j.fees ? j.fees.ep : "", "placeholder=\"0\"")}${box("fv", "VAT on fees %", j.fees ? (j.fees.plusVat ? j.fees.vat : 0) : "", "placeholder=\"20\"")}</div>
+      <p class="src" style="margin:0">${j.fees ? "Fees: " + esc(feesText(j.fees)) + "." : "No fees found – type them if you know them."}</p>
+      ${j.payments.length ? `<div class="fld"><span class="lbl">Payments and invoices</span>${j.payments.map(payHTML).join("")}</div>`
+        : `<div class="two">${box("paid", "Amount paid (£)", numOrNull(p.paid), `placeholder="0"`)}
+      <div class="fld"><label for="p-on">Paid on</label><input class="inp" id="p-on" type="date" value="${esc(p.paidOn || "")}"></div></div>`}
       <div class="fld"><label for="p-note">Note</label><input class="inp" id="p-note" value="${esc(p.note || "")}" placeholder="e.g. invoice sent 3 Oct"></div>
-      <div><button class="btn small" data-payfull>Paid in full today</button></div>
-      <p class="src" style="margin:0">Expected now: ${money(j.expected)}. An empty day rate uses the £ amount from the call's rate text.</p>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${j.payments.length ? "" : `<button class="btn small" data-payfull>Paid in full today</button>`}<button class="btn small" data-remit="${j.c.id}">Paste remittance or invoice</button></div>
+      <p class="src" style="margin:0">Expected now: ${money(j.expected)}${j.fees ? ` (gross ${money(j.gross)} − fees)` : ""}. An empty day rate uses the £ amount from the call's rate text.</p>
     </div>
     <footer><button class="btn primary" data-paysave ${S.canWrite ? "" : "disabled"}>Save</button><button class="btn ghost" data-close>Cancel</button></footer>
   </aside>`;
 }
+/* one saved payment or invoice, with its checks */
+function payHTML(x){
+  const amt = (k, l) => x[k] !== null && x[k] !== undefined ? `<span>${l} ${money(x[k])}</span>` : "";
+  return `<div class="paybox"><div class="paytop"><b>${x.kind === "invoice" ? "Invoice" : x.kind === "manual" ? "Marked paid" : "Remittance"}</b> ${x.paidOn ? "· " + esc(fmtDM(x.paidOn)) : ""}
+      <span style="flex:1"></span><button class="btn small ghost" data-paydel="${esc(x.id)}" title="Remove this payment">✕</button></div>
+    <div class="payamts">${amt("gross", "Gross")}${amt("commission", "Commission")}${amt("ep", "EP fee")}${amt("vat", "VAT")}${amt("net", x.kind === "invoice" ? "Total" : "Net")}</div>
+    ${(x.days || []).length ? `<div class="src">Days: ${esc(x.days.map(fmtDay).join(", "))}</div>` : ""}
+    ${(x.checks || []).length ? `<ul class="checks">${x.checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what)}</li>`).join("")}</ul>` : ""}
+    ${x.text ? `<details><summary class="src">What you pasted</summary><pre class="raw">${esc(x.text)}</pre></details>` : ""}</div>`;
+}
 /* fill "amount paid" with the expected total and "paid on" with today */
 function payFull(){
-  const c = S.calls.get(payId); if (!c) return;
-  const days = (c.dates || []).filter(e => dayStatus(c, e) === "done").length;
-  const rate = numOrNull($("#p-rate", layer).value) ?? rateGuess(c.rate) ?? 0;
-  const extras = numOrNull($("#p-extras", layer).value) || 0;
-  $("#p-paid", layer).value = Math.round((rate * days + extras) * 100) / 100;
+  const j = moneyJobs().find(x => x.c.id === payId); if (!j) return;
+  $("#p-paid", layer).value = Math.round(Math.max(0, j.expected) * 100) / 100;
   $("#p-on", layer).value = TODAY;
 }
+/* saves only this editor's own fields (payments from remittances are kept) */
 async function savePay(){
-  const v = id => $("#" + id, layer).value.trim();
-  const pay = {rate: numOrNull(v("p-rate")), extras: numOrNull(v("p-extras")), paid: numOrNull(v("p-paid")), paidOn: v("p-on") || null, note: v("p-note")};
-  if ([pay.rate, pay.extras, pay.paid].some(n => n !== null && n < 0)){ toast("Amounts can't be below zero"); return; }
-  if (pay.paid && !pay.paidOn) pay.paidOn = TODAY;      // paid but no date: assume today
+  const v = id => { const el = $("#" + id, layer); return el ? el.value.trim() : ""; };
+  const ch = {"pay.rate": numOrNull(v("p-rate")), "pay.extras": numOrNull(v("p-extras")), "pay.note": v("p-note"), updatedAt: new Date().toISOString()};
+  if ($("#p-paid", layer)){ ch["pay.paid"] = numOrNull(v("p-paid")); ch["pay.paidOn"] = v("p-on") || (numOrNull(v("p-paid")) ? TODAY : null); }
+  const fa = numOrNull(v("p-fa")), fe = numOrNull(v("p-fe")), fv = numOrNull(v("p-fv"));
+  const c = S.calls.get(payId), found = c && !(c.pay || {}).fees ? jobFees(c) : null;
+  const typed = fa !== null || fe !== null || fv !== null ? {agency: fa || 0, ep: fe || 0, vat: fv === null ? 20 : fv, plusVat: (fv === null ? 20 : fv) > 0} : null;
+  // fees saved only when you typed something different from what the emails say
+  if (typed && !(found && found.agency === typed.agency && found.ep === typed.ep && (found.plusVat ? found.vat : 0) === (typed.plusVat ? typed.vat : 0))) ch["pay.fees"] = typed;
+  if (!typed && c && (c.pay || {}).fees) ch["pay.fees"] = null;
+  if ([ch["pay.rate"], ch["pay.extras"], ch["pay.paid"], fa, fe, fv].some(n => n !== null && n !== undefined && n < 0)){ toast("Amounts can't be below zero"); return; }
   try {
-    await S.db.collection("calls").doc(payId).update({pay, updatedAt: new Date().toISOString()});
-    toast("Saved");
+    await S.db.collection("calls").doc(payId).update(ch);
+    toast("Saved"); closeSheet(); render();
+  } catch (e) { writeFailed(e); }
+}
+async function delPayment(pid){
+  const c = S.calls.get(payId); if (!c) return;
+  const rest = ((c.pay || {}).payments || []).filter(x => x.id !== pid);
+  try { await S.db.collection("calls").doc(payId).update({"pay.payments": rest, updatedAt: new Date().toISOString()}); toast("Payment removed"); const id = payId; closeSheet(); openPay(id); }
+  catch (e) { writeFailed(e); }
+}
+
+/* ================= Done tab: every job you worked, paid or not ================= */
+S.doneFilter = load("doneFilter", "all");
+function renderDone(){
+  const all = moneyJobs();
+  const pick = {all: () => true, unpaid: j => j.status !== "paid", paid: j => j.status === "paid", check: j => j.bad};
+  const jobs = all.filter(pick[S.doneFilter] || pick.all);
+  const n = k => all.filter(pick[k]).length;
+  let h = `<div class="bar"><h2 class="month-title" style="margin:0">Jobs done</h2><span class="src">${all.length} job${all.length === 1 ? "" : "s"} with days worked</span><span style="flex:1"></span>
+    <button class="btn primary small" data-remit="">Paste remittance or invoice</button></div>
+  <div class="legend" role="group" aria-label="Show">${[["all","All"],["unpaid","Not paid"],["paid","Paid"],["check","⚠ To check"]].map(([k, l]) =>
+    `<button class="fchip" data-donef="${k}" aria-pressed="${S.doneFilter === k}">${l} · ${n(k)}</button>`).join("")}</div>`;
+  if (!jobs.length){ main.innerHTML = h + `<div class="empty"><h2>Nothing here</h2><p>Days you worked (blue “done” days) appear here.</p></div>`; return; }
+  h += `<div class="dlist">${jobs.map(j => {
+    const [chip, cls] = PAY_CHIP[j.status];
+    return `<section class="dcard">
+      <div class="dtop"><button type="button" class="dname" data-pay="${j.c.id}"><b>${esc(nameOf(j.c))}</b><small>${esc(j.c.agency || "No agency")}</small></button>
+        <span class="pill ${cls}">${chip}</span>${j.bad ? `<span class="pill pay-over">⚠ check</span>` : ""}</div>
+      <div class="ddays">${j.worked.map(d => `<span class="chip s-done">${esc(fmtDay(d))}</span>`).join("")}</div>
+      <div class="dnums"><span>Expected ${j.gross ? `<b>${money(j.expected)}</b>${j.fees ? ` <small>(gross ${money(j.gross)})</small>` : ""}` : `<b>–</b> <small>add the day rate in Details, or paste the remittance</small>`}</span><span>Paid <b>${money(j.paid)}</b>${j.paidOn ? ` <small>on ${esc(fmtDM(j.paidOn))}</small>` : ""}</span>
+        <small class="src">${esc(feesText(j.fees))}${j.rate === null ? " · no day rate yet" : ""}</small></div>
+      <div class="dbtns">${j.status !== "paid" ? `<button class="btn small" data-markpaid="${j.c.id}">✓ Mark paid</button>` : ""}<button class="btn small" data-remit="${j.c.id}">Paste remittance</button><button class="btn small ghost" data-pay="${j.c.id}">Details${j.payments.length ? ` · ${j.payments.length} payment${j.payments.length === 1 ? "" : "s"}` : ""}</button></div>
+    </section>`;}).join("")}</div>`;
+  main.innerHTML = h;
+}
+/* quick: the rest of the expected amount, paid today */
+async function markPaid(id){
+  const j = moneyJobs().find(x => x.c.id === id); if (!j) return;
+  const amount = Math.round(Math.max(0, j.expected - j.paid) * 100) / 100;
+  // no day rate or fees to work it out: type the amount yourself
+  if (amount <= 0){ openPay(id); toast("Type what you were paid (or paste the remittance)"); return; }
+  const pay = {id: "m" + Date.now().toString(36), kind: "manual", paidOn: TODAY, gross: null, commission: null, ep: null, vat: null, net: amount, days: j.worked, savedAt: new Date().toISOString(), checks: []};
+  const list = legacyPayments(j.c).concat([pay]);
+  try { await S.db.collection("calls").doc(id).update({"pay.payments": list, updatedAt: new Date().toISOString()}); toast(`${nameOf(j.c)}: marked paid (${money(amount)})`); }
+  catch (e) { writeFailed(e); }
+}
+/* a job's payments so far (an amount typed before remittances existed becomes a payment too) */
+function legacyPayments(c){
+  const p = c.pay || {};
+  if (Array.isArray(p.payments)) return p.payments.slice();
+  return numOrNull(p.paid) ? [{id: "old", kind: "manual", paidOn: p.paidOn || "", gross: null, commission: null, ep: null, vat: null, net: numOrNull(p.paid), days: [], checks: []}] : [];
+}
+
+/* ---------- paste a remittance or invoice: read it, show what it says and the checks, then save ---------- */
+let remit = null;
+function openRemit(forId){
+  remit = {forId: forId || "", text: "", r: null};
+  drawRemit();
+  setTimeout(() => $("#rm-text", layer)?.focus(), 50);
+}
+function remitJobs(){ return moneyJobs().map(j => ({id: j.c.id, name: nameOf(j.c), agency: j.c.agency || "", worked: j.worked, j})); }
+function drawRemit(){
+  const r = remit.r;
+  const jobs = remitJobs();
+  const opts = sel => `<option value="">Choose the job…</option>${jobs.map(x => `<option value="${x.id}"${x.id === sel ? " selected" : ""}>${esc(x.name)} · ${esc(x.agency)} · ${esc(fmtDM(x.worked[x.worked.length - 1]))}</option>`).join("")}`;
+  const inp = (k, l, v, type) => `<div class="fld"><label for="rm-${k}">${l}</label><input class="inp" id="rm-${k}" type="${type || "number"}" ${type ? "" : 'step="0.01" inputmode="decimal"'} value="${v ?? ""}"></div>`;
+  let body = `<div class="fld"><label for="rm-text">Paste the remittance (or your invoice) here – copy it from the email or PDF</label><textarea class="inp" id="rm-text" rows="8" placeholder="Remittance advice…">${esc(remit.text)}</textarea></div>
+    <div><button class="btn primary small" data-remitread>Read it</button></div>`;
+  if (r){
+    const targets = r.jobs.length ? r.jobs : [{id: remit.forId || "", days: r.days, share: 1}];
+    body += `<section class="panel" style="margin:0"><h2>What it says</h2>
+      <div class="fld"><span class="lbl">This is</span><div class="status-pick"><button type="button" data-rmkind="remittance" aria-pressed="${r.kind !== "invoice"}">A payment (remittance)</button><button type="button" data-rmkind="invoice" aria-pressed="${r.kind === "invoice"}">An invoice I sent</button></div></div>
+      <div class="three">${inp("gross", "Gross £", r.gross)}${inp("commission", "Commission £", r.commission)}${inp("ep", "EP fee £", r.ep)}</div>
+      <div class="three">${inp("vat", "VAT £", r.vat)}${inp("net", r.kind === "invoice" ? "Total £" : "Net paid £", r.net)}${inp("on", r.kind === "invoice" ? "Sent on" : "Paid on", r.paidOn || TODAY, "date")}</div>
+      ${r.days.length ? `<p class="src" style="margin:0">Days it pays: ${esc(r.days.map(fmtDay).join(", "))}</p>` : `<p class="src" style="margin:0">No work days found in it.</p>`}
+      ${targets.map((t, i) => {
+        const x = jobs.find(y => y.id === t.id);
+        const checks = x ? Money.checkPayment(scaled(r, t), x.j.fees, x.worked, x.j.rate) : [];
+        return `<div class="fld"><span class="lbl">${targets.length > 1 ? `Job ${i + 1} · ${Math.round(t.share * 100)}% of it` : "For the job"}</span>
+          <select class="inp" id="rm-job${i}">${opts(t.id)}</select>
+          ${x ? `<p class="src" style="margin:0">${esc(feesText(x.j.fees))}</p>` : ""}
+          ${checks.length ? `<ul class="checks">${checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what)}</li>`).join("")}</ul>` : ""}</div>`;
+      }).join("")}
+    </section>`;
+  }
+  layer.innerHTML = `<div class="scrim" data-close></div><aside class="sheet" role="dialog" aria-label="Paste a remittance">
+    <header><h2>Remittance or invoice</h2><button class="btn small ghost" data-close aria-label="Close">✕</button></header>
+    <div class="content">${body}</div>
+    <footer><button class="btn primary" data-remitsave ${r && S.canWrite ? "" : "disabled"}>Save to the job${r && r.jobs.length > 1 ? "s" : ""}</button><button class="btn ghost" data-close>Cancel</button></footer>
+  </aside>`;
+}
+/* one job's part of a remittance that pays several jobs */
+function scaled(r, t){
+  const k = t.share, f = v => v === null || v === undefined ? null : Math.round(v * k * 100) / 100;
+  return {gross: f(r.gross), commission: f(r.commission), ep: f(r.ep), vat: f(r.vat), net: f(r.net), days: t.days && t.days.length ? t.days : r.days};
+}
+function readRemitNow(){
+  remit.text = $("#rm-text", layer).value;
+  if (!remit.text.trim()){ toast("Paste the remittance first"); return; }
+  remit.r = Money.readRemittance(remit.text, remitJobs(), TODAY);
+  if (!remit.r.jobs.length && remit.forId) remit.r.jobs = [{id: remit.forId, days: remit.r.days, share: 1}];
+  drawRemit();
+}
+/* your corrections in the boxes count before saving */
+function pullRemit(){
+  const r = remit.r; if (!r) return;
+  const n = k => { const el = $("#rm-" + k, layer); return el ? numOrNull(el.value.trim()) : null; };
+  ["gross", "commission", "ep", "vat", "net"].forEach(k => r[k] = n(k));
+  r.paidOn = $("#rm-on", layer)?.value || TODAY;
+  const targets = r.jobs.length ? r.jobs : [{id: "", days: r.days, share: 1}];
+  targets.forEach((t, i) => { const v = $("#rm-job" + i, layer)?.value; if (v !== undefined) t.id = v; });
+  r.jobs = targets.filter(t => t.id);
+}
+async function saveRemit(){
+  pullRemit();
+  const r = remit.r;
+  if (!r.jobs.length){ toast("Choose the job it's for"); return; }
+  if (r.net === null){ toast(r.kind === "invoice" ? "Type the invoice total" : "Type the amount paid"); return; }
+  const jobs = remitJobs();
+  try {
+    const batch = S.db.batch();
+    for (const t of r.jobs){
+      const x = jobs.find(y => y.id === t.id); if (!x) continue;
+      const part = scaled(r, t);
+      const pay = {id: "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind: r.kind, paidOn: r.paidOn, ...part,
+        text: remit.text.slice(0, 6000), savedAt: new Date().toISOString(), checks: Money.checkPayment(part, x.j.fees, x.worked, x.j.rate)};
+      batch.update(S.db.collection("calls").doc(t.id), {"pay.payments": legacyPayments(x.j.c).concat([pay]), updatedAt: new Date().toISOString()});
+    }
+    await batch.commit();
+    toast(r.kind === "invoice" ? "Invoice saved" : "Payment saved");
     closeSheet(); render();
   } catch (e) { writeFailed(e); }
 }
+
 /* the money table as a spreadsheet */
 function exportMoneyCSV(){
-  const rows = [["Month","Production","Agency","Days worked","Worked dates","Day rate","Rate is estimate","Extras","Expected","Paid","Paid on","Status","Note"]];
+  const rows = [["Month","Production","Agency","Days worked","Worked dates","Day rate","Rate is estimate","Extras","Gross","Fees","Expected (net)","Paid","Paid on","Status","Note"]];
   for (const j of moneyJobs()){
     rows.push([monthName(j.last.slice(0, 7)), nameOf(j.c), j.c.agency || "", j.worked.length, j.worked.map(fmtDay).join(", "),
-      j.rate ?? "", j.estimate ? "yes" : "", j.extras || "", j.expected.toFixed(2), j.paid.toFixed(2), j.paidOn, PAY_CHIP[j.status][0], j.note]);
+      j.rate ?? "", j.estimate ? "yes" : "", j.extras || "", j.gross.toFixed(2), feesText(j.fees), j.expected.toFixed(2), j.paid.toFixed(2), j.paidOn, PAY_CHIP[j.status][0] + (j.bad ? " (check)" : ""), j.note]);
   }
   const csv = rows.map(r => r.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
   saveFile(`filming-money-${TODAY}.csv`, "﻿" + csv, "text/csv");
@@ -1380,7 +1581,7 @@ function moveHTML(m, d){
   const others = jobChoices(d.agency, []).filter(c => c.id !== draftId);
   return `<div class="fixrow"><select class="inp fsel" data-filesel="${esc(m.key)}" aria-label="Move this email"><option value="">Wrong job? Move this email to…</option>${others.map(c => `<option value="${c.id}">${esc(jobLabel(c))}</option>`).join("")}<option value="new">A new job</option><option value="ignore">Not about a job</option></select></div>`;
 }
-function closeSheet(){ layer.innerHTML = ""; draft = null; draftId = null; payId = null; }
+function closeSheet(){ layer.innerHTML = ""; draft = null; draftId = null; payId = null; remit = null; }
 function drawEditor(){
   const d = draft;
   const ro = !S.canWrite;
@@ -1930,6 +2131,13 @@ document.addEventListener("click", e => {
   if ("payfull" in ds){ payFull(); return; }
   if ("paysave" in ds){ savePay(); return; }
   if ("moneycsv" in ds){ exportMoneyCSV(); return; }
+  if (ds.donef){ S.doneFilter = ds.donef; save("doneFilter", S.doneFilter); render(); return; }
+  if (ds.markpaid){ markPaid(ds.markpaid); return; }
+  if (ds.remit !== undefined){ openRemit(ds.remit); return; }
+  if ("remitread" in ds){ readRemitNow(); return; }
+  if (ds.rmkind && remit && remit.r){ pullRemit(); remit.r.kind = ds.rmkind; drawRemit(); return; }
+  if ("remitsave" in ds){ saveRemit(); return; }
+  if (ds.paydel){ delPayment(ds.paydel); return; }
   if ("health" in ds){ openHealth(); return; }
   if ("extract" in ds){ extract(); return; }
   if ("csv" in ds){ exportCSV(); return; }
@@ -2078,7 +2286,7 @@ function showLogin(msg){
         main.innerHTML = `<div class="empty"><h2>No calls yet</h2><p>Import your backup file from “Backup”, or add your first availability check with “+ Add availability check”.</p></div>`;
         return;
       }
-      if (layer.innerHTML && (draft || payId)) return;   // don't redraw under the editor
+      if (layer.innerHTML && (draft || payId || remit)) return;   // don't redraw under the editor
       const hadFocus = document.activeElement?.id === "q";
       render();
       if (hadFocus) $("#q")?.focus();

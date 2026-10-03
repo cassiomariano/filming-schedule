@@ -4,7 +4,7 @@
   "private": true,
   "description": "Availability checks calendar with an automatic Yahoo inbox reader",
   "scripts": {
-    "test": "node tests/test-parser.js && node tests/test-core.js",
+    "test": "node tests/test-parser.js && node tests/test-core.js && node tests/test-money.js",
     "check-email": "node scripts/check-email.js"
   },
   "dependencies": {
