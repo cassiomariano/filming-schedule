@@ -89,5 +89,29 @@ const r6 = M.readRemittance(`Payment for Falcon (Extra People)\nNet amount paid:
 ok("No dates: job found by name", r6.jobs.length === 1 && r6.jobs[0].id === "falcon" && r6.net === 204.41, r6);
 ok("Dates are never read as money", M.readRemittance("07/10/2026 Basic 120.00", jobs, "x").items[0].amount === 120);
 
+// 7) Entertainment Partners remittance PDFs (real layout, made-up names and numbers): two in one go
+const ep = M.readPayments(require("fs").readFileSync(__dirname + "/fixtures/ep-remittances.txt", "utf8"),
+  [{ id: "k1", name: "Kestrel One", agency: "Test Casting", worked: ["2025-03-17"] }, { id: "k0", name: "Kestrel One", agency: "Test Casting", worked: ["2025-02-25"] }], "2026-10-03");
+ok("EP PDFs: two remittances found", ep.length === 2, ep.length);
+const a = ep[0];
+ok("EP PDF: project, agency, invoice, hours", a.project === "KESTREL ONE" && a.agency === "Test Casting" && a.invoiceNo === "100001" && a.hours === 14.65, a);
+ok("EP PDF: gross 388.46, admin fee 38.84 + VAT 7.77, commission 38.84 + VAT 7.77, deposited 295.24",
+  a.gross === 388.46 && a.ep === 38.84 && a.epVat === 7.77 && a.commission === 38.84 && a.commissionVat === 7.77 && a.vat === 15.54 && a.net === 295.24, a);
+ok("EP PDF: the day's parts (B/M, Travel, E/C, O/T, H/C, Basic)", JSON.stringify(a.perDay[0].parts) === JSON.stringify({ "B/M": 22.28, Travel: 35.85, "E/C": 100.2, "O/T": 111.4, "H/C": 11.54, Basic: 107.19 }) && a.perDay[0].d === "2025-03-17", a.perDay);
+ok("EP PDF: second one has only Travel, H/C, Basic", JSON.stringify(ep[1].perDay[0].parts) === JSON.stringify({ Travel: 21.55, "H/C": 5.77, Basic: 53.6 }) && ep[1].net === 61.5, ep[1].perDay);
+ok("EP PDF: each found its job by the day", a.job === "k1" && ep[1].job === "k0", [a.job, ep[1].job]);
+ok("EP PDF: every check passes with 10% + 10% + VAT", M.checkPayment(a, f1, ["2025-03-17"]).every(c => c.ok), M.checkPayment(a, f1, ["2025-03-17"]));
+ok("EP PDF: no National Insurance number is ever kept", M.redact("NI Number QQ123456C").indexOf("QQ123456C") === -1);
+
+// 8) the table on the EP payments page, copied (tabs between cells)
+const tab = "Project Name\tStatus\tRemittance Advice\tDeposit Date\tDays Worked\tGross\tFees\tVAT\tDeposited\nKESTREL ONE\tPaid\tDownload PDF\t15 April 2025\t17 Mar 2025\t388.46\t-77.68\t-15.54\t295.24\nKESTREL ONE\tPaid\tDownload PDF\t25 March 2025\t25 Feb 2025\t80.92\t-16.18\t-3.24\t61.5\nRows: 2";
+const rows = M.readPayments(tab, [], "2026-10-03");
+ok("Payments page: two rows with deposit date, day worked and amounts", rows.length === 2 && rows[0].paidOn === "2025-04-15" && rows[0].days.join() === "2025-03-17" && rows[0].fees === 77.68 && rows[0].vat === 15.54 && rows[1].net === 61.5, rows);
+ok("Payments page: fees 20% and VAT checked", M.checkPayment(rows[0], f1, ["2025-03-17"]).every(c => c.ok));
+const same = M.samePayment(rows[0], a), merged = M.mergePayment(a, rows[0]);
+ok("The PDF and its row are the same payment; together they keep the breakdown AND the deposit date", same && merged.paidOn === "2025-04-15" && merged.perDay.length === 1 && merged.invoiceNo === "100001", merged);
+const rowsCells = M.readPayments(tab.replace(/\t/g, "\n"), [], "x");
+ok("Payments page copied one cell per line also works", rowsCells.length === 2 && rowsCells[1].paidOn === "2025-03-25", rowsCells);
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

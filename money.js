@@ -141,6 +141,188 @@
     return out;
   }
 
+  // ---------- Entertainment Partners remittance (the PDF from the payments page) ----------
+  // Sections: SELF BILLING INVOICE (what the production pays per day: B/M, Travel, E/C, O/T, H/C, Basic…),
+  // COMMISSIONS INVOICE (Admin Fee* + VAT, Agent Commission + VAT), Deposit Summary, PAYSLIP (hours).
+  // text = the PDF's text with its columns kept (layoutText below), one or several remittances.
+  var PART_NAMES = { "basic": "Basic fee", "h/c": "Holiday pay", "o/t": "Overtime", "e/c": "Early call", "travel": "Travel", "b/m": "B/M", "n/s": "Night supplement", "fit": "Fitting", "w/c": "Wardrobe call" };
+  // the value written under a heading on the next lines ("Project" → "BROKEN EGGS")
+  function under(lines, i, label) {
+    var at = lines[i].indexOf(label);
+    for (var j = i + 1; j < Math.min(lines.length, i + 3); j++) {
+      var l = lines[j];
+      if (!l.trim()) continue;
+      // the word(s) that start near that column
+      var re = /\S+(?: \S+)*/g, m, best = null;
+      while ((m = re.exec(l))) { var d = Math.abs(m.index - at); var end = m.index + m[0].length; if ((m.index <= at + label.length + 2 && end >= at - 2) && (!best || d < best.d)) best = { v: m[0], d: d }; }
+      if (best) return best.v;
+    }
+    return "";
+  }
+  // a table: heading line (Date … Total) and its rows; each number goes to the heading it lines up with
+  function table(lines, i) {
+    var head = lines[i], cols = [], re = /\S+(?: \S+)*/g, m;
+    while ((m = re.exec(head))) if (!/^date$/i.test(m[0])) cols.push({ name: m[0], end: m.index + m[0].length, at: m.index });
+    var rows = [];
+    for (var j = i + 1; j < lines.length; j++) {
+      var l = lines[j];
+      if (!l.trim()) continue;
+      var ds = datesIn(l);
+      if (!ds.length || ds[0].at > 12 + (l.length - l.replace(/^\s+/, "").length)) break;   // the rows start with a date; "Total" ends them
+      var row = { d: ds[0].d, cells: {} };
+      var nre = /-?\d{1,3}(?:,\d{3})*\.\d{2}/g, n;
+      while ((n = nre.exec(l))) {
+        if (n.index < ds[0].end) continue;
+        var end = n.index + n[0].length, best = null;
+        cols.forEach(function (c, k) { var dist = Math.abs(c.end - end); if (!best || dist < best.dist) best = { k: k, dist: dist }; });
+        if (best) { var key = cols[best.k].name + (cols.slice(0, best.k).filter(function (c) { return c.name === cols[best.k].name; }).length ? "#2" : ""); row.cells[key] = Number(n[0].replace(/,/g, "")); }
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+  function readEPRemittance(text) {
+    var blocks = String(text).split(/(?=SELF BILLING INVOICE)/).filter(function (b) { return /SELF BILLING INVOICE/.test(b); });
+    return blocks.map(function (b) {
+      var lines = b.split(/\r?\n/);
+      var p = { source: "ep-pdf", project: "", hirer: "", agency: "", invoiceNo: "", taxPoint: null, paidOn: null, hours: null, days: [], perDay: [],
+        gross: null, ep: null, epVat: null, commission: null, commissionVat: null, vat: null, fees: null, net: null, status: "paid" };
+      var section = "earn";
+      lines.forEach(function (l, i) {
+        if (/COMMISSIONS INVOICE/.test(l)) section = "fees";
+        if (/^\s*PAYSLIP/.test(l)) section = "slip";
+        if (/\bProject\b/.test(l) && !p.project) p.project = under(lines, i, "Project");
+        if (/\bHirer\b/.test(l) && !p.hirer) p.hirer = under(lines, i, "Hirer");
+        if (/Invoice No/.test(l) && !p.invoiceNo) p.invoiceNo = under(lines, i, "Invoice No");
+        if (/Tax Point/.test(l) && !p.taxPoint) { var tp = datesIn(under(lines, i, "Tax Point")); if (tp.length) p.taxPoint = tp[0].d; }
+        if (/Hours Worked/.test(l) && p.hours === null) { var h = under(lines, i, "Hours Worked"); if (/^\d+(\.\d+)?$/.test(h)) p.hours = Number(h); }
+        if (/Registered in England/i.test(l) && !p.agency) { var prev = (lines[i - 1] || "").trim().split(/\s{2,}/)[0]; if (/\b(ltd|limited|casting|extras|agency)\b/i.test(prev)) p.agency = prev.replace(/\s+(limited|ltd)\.?$/i, ""); }
+        if (/^\s*Date\b/.test(l) && /Total/.test(l)) {
+          var rows = table(lines, i);
+          if (section === "earn" && !p.perDay.length) p.perDay = rows.map(function (r) {
+            var parts = {}; Object.keys(r.cells).forEach(function (k) { if (!/^total/i.test(k)) parts[k] = r.cells[k]; });
+            return { d: r.d, parts: parts, total: r.cells.Total !== undefined ? r.cells.Total : null };
+          });
+          if (section === "fees") rows.forEach(function (r) {
+            Object.keys(r.cells).forEach(function (k) {
+              var v = r.cells[k];
+              if (/admin/i.test(k)) p.ep = r2((p.ep || 0) + v);
+              else if (/commission/i.test(k)) p.commission = r2((p.commission || 0) + v);
+              else if (/^vat/i.test(k)) { if (/#2$/.test(k)) p.commissionVat = r2((p.commissionVat || 0) + v); else p.epVat = r2((p.epVat || 0) + v); }
+            });
+          });
+        }
+        var amt = l.match(/(-?\d{1,3}(?:,\d{3})*\.\d{2})\s*$/);
+        if (/Total due from the Hirer/i.test(l) && amt) p.gross = Number(amt[1].replace(/,/g, ""));
+        if (/Total deposited to your account/i.test(l) && amt) p.net = Number(amt[1].replace(/,/g, ""));
+      });
+      if (p.gross === null) p.gross = r2(p.perDay.reduce(function (s, x) { return s + (x.total || 0); }, 0));
+      p.vat = p.epVat !== null || p.commissionVat !== null ? r2((p.epVat || 0) + (p.commissionVat || 0)) : null;
+      p.fees = p.ep !== null || p.commission !== null ? r2((p.ep || 0) + (p.commission || 0)) : null;
+      if (p.net === null && p.gross !== null) p.net = r2(p.gross - (p.fees || 0) - (p.vat || 0));
+      p.days = p.perDay.map(function (x) { return x.d; });
+      p.paidOn = p.taxPoint;          // the PDF has no deposit date; the payments page does (paste it to add it)
+      return p;
+    });
+  }
+
+  // ---------- the table on your EP payments page, copied and pasted ----------
+  // Project Name | Status | Remittance Advice | Deposit Date | Days Worked | Gross | Fees | VAT | Deposited
+  function readEPTable(text) {
+    var toks = String(text).split(/\t|\r?\n/).map(function (t) { return t.trim(); }).filter(function (t) { return t && !/^(download pdf|filter|x|rows:.*)$/i.test(t); });
+    var num = function (t) { return /^-?£?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?$/.test(t) ? Number(t.replace(/[£,]/g, "")) : null; };
+    var out = [], start = 0;
+    for (var i = 0; i + 3 < toks.length; i++) {
+      var g = num(toks[i]), f = num(toks[i + 1]), v = num(toks[i + 2]), n = num(toks[i + 3]);
+      if (g === null || f === null || v === null || n === null) continue;
+      // a row ends with Gross, Fees, VAT, Deposited (Gross − Fees − VAT = Deposited)
+      if (Math.abs(g - Math.abs(f) - Math.abs(v) - n) > 0.02) continue;
+      var head = toks.slice(start, i).filter(function (t) { return !/^(project name|status|remittance advice|deposit date|days worked|gross|fees|vat|deposited)$/i.test(t); });
+      var dates = [], words = [];
+      head.forEach(function (t) { var ds = datesIn(t); if (ds.length) dates.push.apply(dates, ds.map(function (x) { return x.d; })); else words.push(t); });
+      var status = words.filter(function (w) { return /^(paid|pending|processing|approved|on hold|unpaid)$/i.test(w); })[0] || "Paid";
+      var project = words.filter(function (w) { return !/^(paid|pending|processing|approved|on hold|unpaid)$/i.test(w); }).join(" ").trim();
+      out.push({ source: "ep-table", project: project, agency: "", invoiceNo: "", status: /paid/i.test(status) ? "paid" : "pending",
+        paidOn: dates[0] || null, days: dates.slice(1).sort(), perDay: [], hours: null,
+        gross: g, fees: Math.abs(f), ep: null, commission: null, vat: Math.abs(v), epVat: null, commissionVat: null, net: n });
+      start = i + 4; i += 3;
+    }
+    return out;
+  }
+  var looksEPTable = function (t) { return /Deposited|Download PDF/i.test(t) && /Gross/i.test(t) || readEPTable(t).length >= 1 && !/SELF BILLING INVOICE/.test(t) && /\t/.test(t); };
+
+  // ---------- any of them → payments, each with the job it belongs to ----------
+  // jobs = [{ id, name, agency, worked: [days] }]
+  function readPayments(text, jobs, today) {
+    var t = String(text || "");
+    var list;
+    if (/SELF BILLING INVOICE/.test(t)) list = readEPRemittance(t);
+    else if (looksEPTable(t) && readEPTable(t).length) list = readEPTable(t);
+    else {
+      var r = readRemittance(t, [], today);
+      list = [{ source: "text", project: "", agency: "", invoiceNo: "", status: r.kind === "invoice" ? "invoice" : "paid", paidOn: r.paidOn, days: r.days, perDay: [], hours: null,
+        gross: r.gross, ep: r.ep, commission: r.commission, vat: r.vat, fees: r.ep !== null || r.commission !== null ? r2((r.ep || 0) + (r.commission || 0)) : null, net: r.net }];
+    }
+    list.forEach(function (p) { p.job = matchPayment(p, t, jobs || []); });
+    return list;
+  }
+  function matchPayment(p, text, jobs) {
+    var byDay = jobs.filter(function (j) { return p.days.some(function (d) { return (j.worked || []).indexOf(d) !== -1; }); });
+    if (byDay.length === 1) return byDay[0].id;
+    var forms = function (name) { var f = String(name || ""); return [f, f.replace(/\s*[\(\[].*$/, ""), f.replace(/^[A-Za-z]{2,4}\s*[-–:]\s*/, "")].map(norm).filter(function (x) { return x.length >= 4; }); };
+    var named = (byDay.length ? byDay : jobs).filter(function (j) {
+      return p.project ? forms(j.name).some(function (f) { return forms(p.project).indexOf(f) !== -1 || norm(p.project).indexOf(f) === 0; }) : forms(j.name).some(function (f) { return norm(text).indexOf(f) !== -1; });
+    });
+    if (named.length === 1) return named[0].id;
+    // same name: the job whose days are nearest to the paid days
+    if (named.length > 1 && p.days.length) {
+      var dist = function (j) { return Math.min.apply(null, (j.worked || []).map(function (w) { return Math.min.apply(null, p.days.map(function (d) { return Math.abs(new Date(w) - new Date(d)); })); })); };
+      return named.slice().sort(function (a, b) { return dist(a) - dist(b); })[0].id;
+    }
+    return null;
+  }
+  // a payment saved twice (e.g. its PDF and its row on the payments page): the same job, days and amount
+  function samePayment(a, b) {
+    if (a.invoiceNo && b.invoiceNo) return a.invoiceNo === b.invoiceNo;
+    return Math.abs((a.net || 0) - (b.net || 0)) < 0.01 && Math.abs((a.gross || 0) - (b.gross || 0)) < 0.01 && (a.days || []).join() === (b.days || []).join();
+  }
+  // keeps the most of both (the PDF knows the breakdown, the page knows the deposit date)
+  function mergePayment(a, b) {
+    var out = {}; Object.keys(a).forEach(function (k) { out[k] = a[k]; });
+    Object.keys(b).forEach(function (k) { if (out[k] === null || out[k] === undefined || out[k] === "" || (Array.isArray(out[k]) && !out[k].length)) out[k] = b[k]; });
+    if (b.source === "ep-table" && b.paidOn) { out.paidOn = b.paidOn; out.deposited = true; }   // the real deposit date
+    if (a.source === "ep-table" && a.paidOn) { out.paidOn = a.paidOn; out.deposited = true; }
+    return out;
+  }
+
+  // ---------- a PDF's words with their positions → lines that keep the columns ----------
+  // pages = [[{ s: text, x, y }]] (as pdf.js gives them)
+  function layoutText(pages) {
+    var out = [];
+    pages.forEach(function (items) {
+      var rows = [];
+      items.filter(function (it) { return it.s && it.s.trim(); }).forEach(function (it) {
+        var r = null; rows.forEach(function (x) { if (!r && Math.abs(x.y - it.y) < 2.5) r = x; });
+        if (!r) { r = { y: it.y, items: [] }; rows.push(r); }
+        r.items.push(it);
+      });
+      rows.sort(function (a, b) { return b.y - a.y; }).forEach(function (r) {
+        var line = "";
+        r.items.sort(function (a, b) { return a.x - b.x; }).forEach(function (it) {
+          var col = Math.round(it.x / 4);
+          if (line.length < col) line += new Array(col - line.length + 1).join(" ");
+          else if (line.length && line[line.length - 1] !== " ") line += " ";
+          line += it.s;
+        });
+        out.push(line.replace(/\s+$/, ""));
+      });
+      out.push("");
+    });
+    return out.join("\n");
+  }
+  // numbers that identify you (National Insurance number) are never kept
+  function redact(text) { return String(text || "").replace(/\b[A-Z]{2}\s?\d{2}\s?\d{2}\s?\d{2}\s?[A-D]\b/gi, "[NI number removed]"); }
+
   // ---------- is it right? ----------
   // payment = { gross, commission, ep, vat, net, days[] }; fees from the emails; worked = the job's worked days
   function checkPayment(p, fees, worked, rate) {
@@ -152,11 +334,18 @@
       out.push(!missing.length && !extra.length ? { ok: true, what: "Pays every day you worked (" + p.days.length + ")" }
         : { ok: false, what: (missing.length ? "Not paid yet: " + missing.join(", ") : "") + (missing.length && extra.length ? " · " : "") + (extra.length ? "Paid days not marked worked: " + extra.join(", ") : "") });
     }
-    if (p.gross !== null && p.net !== null && (p.commission !== null || p.ep !== null || p.vat !== null)) {
-      var sum = r2(p.gross - (p.commission || 0) - (p.ep || 0) - (p.vat || 0));
+    if (p.gross !== null && p.net !== null && (p.commission !== null || p.ep !== null || p.vat !== null || (p.fees !== null && p.fees !== undefined))) {
+      var sum = r2(p.gross - (p.commission !== null || p.ep !== null ? (p.commission || 0) + (p.ep || 0) : (p.fees || 0)) - (p.vat || 0));
       out.push(near(sum, p.net) ? { ok: true, what: "The sum is right: gross − deductions = net" } : { ok: false, what: "The sum doesn't add up: gross − deductions = " + sum.toFixed(2) + ", but it says " + p.net.toFixed(2) });
     }
-    if (fees && p.gross) {
+    if (fees && p.gross && p.commission === null && p.ep === null && p.fees !== null && p.fees !== undefined) {
+      // the payments page shows commission + EP fee as one "Fees" figure
+      var both = r2(p.gross * (fees.agency + fees.ep) / 100);
+      out.push(near(p.fees, both) ? { ok: true, what: "Fees are " + (fees.agency + fees.ep) + "% (" + fees.agency + "% agency" + (fees.ep ? " + " + fees.ep + "% EP" : "") + ")" }
+        : { ok: false, what: "Fees are " + (p.fees / p.gross * 100).toFixed(1) + "% of gross (expected " + (fees.agency + fees.ep) + "%)" });
+      if (p.vat !== null && fees.plusVat) out.push(near(p.vat, r2(p.fees * fees.vat / 100)) ? { ok: true, what: "VAT is " + fees.vat + "% of the fees" } : { ok: false, what: "VAT is " + p.vat.toFixed(2) + " (" + fees.vat + "% of the fees would be " + r2(p.fees * fees.vat / 100).toFixed(2) + ")" });
+    }
+    if (fees && p.gross && (p.commission !== null || p.ep !== null)) {
       var exp = expectedNet(p.gross, fees);
       var said = { agency: "usual for this agency", remittance: "from an earlier remittance", you: "you typed" }[fees.from] || "the emails say";
       if (p.commission !== null) out.push(near(p.commission, exp.commission) ? { ok: true, what: "Agency commission is " + fees.agency + "%" } : { ok: false, what: "Agency commission is " + (p.commission / p.gross * 100).toFixed(1) + "% (" + said + " " + fees.agency + "%)" });
@@ -167,6 +356,10 @@
       }
       if (p.net !== null) out.push(near(p.net, exp.net) ? { ok: true, what: "Net pay matches the expected fees" } : { ok: false, what: "Net pay " + p.net.toFixed(2) + " – with the expected fees (" + said + ") it would be " + exp.net.toFixed(2) });
     }
+    (p.perDay || []).forEach(function (x) {
+      var parts = Object.keys(x.parts || {}).reduce(function (s, k) { return s + x.parts[k]; }, 0);
+      if (x.total !== null && Math.abs(r2(parts) - x.total) > 0.02) out.push({ ok: false, what: x.d + ": the parts add up to " + r2(parts).toFixed(2) + ", not " + x.total.toFixed(2) });
+    });
     if (rate && p.gross && p.days && p.days.length) {
       var per = p.gross / p.days.length;
       if (per < rate - 0.5) out.push({ ok: false, what: "Gross per day £" + per.toFixed(2) + " is below your day rate £" + rate });
@@ -174,7 +367,8 @@
     return out;
   }
 
-  var api = { feesFrom: feesFrom, expectedNet: expectedNet, readRemittance: readRemittance, checkPayment: checkPayment, datesIn: datesIn };
+  var api = { feesFrom: feesFrom, expectedNet: expectedNet, readRemittance: readRemittance, readPayments: readPayments, readEPRemittance: readEPRemittance, readEPTable: readEPTable,
+    samePayment: samePayment, mergePayment: mergePayment, layoutText: layoutText, redact: redact, checkPayment: checkPayment, datesIn: datesIn, PART_NAMES: PART_NAMES };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.Money = api;
 })(this);

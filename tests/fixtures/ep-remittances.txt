@@ -1,0 +1,103 @@
+                                                      SELF BILLING INVOICE
+       Worker                                     Hirer                                     Worker ID                               Tax Point
+       Sam Example Worker Testing                 Kestrel One Test Productions L            1234567                                8 Apr 2025
+       1 Test Street                              Unit 1, Test Park
+                                                                                            NI Number
+       Test Road                                  Test Studios Place,
+                                                                                            QQ123456C
+       London                                     Test Lane  
+       London T1 1ST                              Testtown TT1 1TT   
+                                                  Project                                                                          Invoice No
+                                                  KESTREL ONE                                                                         100001
+                                    This self-billing invoice contains charges from the Worker to the Hirer.
+       Date                                                          B/M       Travel        E/C        O/T        H/C       Basic       Total
+       17 Mar 2025                                                  22.28      35.85     100.20      111.40      11.54     107.19      388.46
+       Total                                                                                                                           388.46
+       Total due                                                                                                               GBP 388.46
+       Test Casting Limited               Registered office:               Address:                          Email: info@example.com     
+       Registered in England and Wales,  1 Agency Street                  1 Agency Street
+       company no: 00000000              Agencytown AA1 1AA              Agencytown AA1 1AA  
+       VAT registration no: GB000000000
+
+                                                     COMMISSIONS INVOICE
+       Client                                     Project                                                                                Date
+       Sam Example Worker Testing                 KESTREL ONE                                                                      8 Apr 2025
+                                                                                                                                Reference No
+                                                                                                                                 999/100001
+                                                                  Deductions
+       Date                                  Admin Fee*              VAT 20%    Agent Commission               VAT 20%                   Total
+       17 Mar 2025                                 38.84                  7.77                38.84                 7.77                93.22
+       Total                                                                                                                            93.22
+                                                   *Entertainment Partners Administration Fee
+                                                             Deposit Summary
+       Total due from the Hirer                                                                                                      388.46
+       Less: Deductions as detailed above                                                                                             -93.22
+       Total deposited to your account                                                                                         GBP 295.24
+
+                                                                  PAYSLIP
+       Worker                                     Employer                                  Worker ID                             Payroll date
+       Sam Example Worker Testing                 Kestrel One Test Productions L            1234567                                8 Apr 2025
+       1 Test Street                              Unit 1, Test Park
+       Test Road                                  Test Studios Place,
+       London                                     Test Lane  
+       London T1 1ST                              Testtown TT1 1TT   
+                                                  Project                                                                       Reference No
+                                                  KESTREL ONE                                                                    999/100001
+                                                                                                                               Hours Worked
+                                                                                                                                        14.65
+       Date                                                          B/M       Travel        E/C        O/T        H/C       Basic       Total
+       17 Mar 2025                                                  22.28      35.85     100.20      111.40      11.54     107.19      388.46
+       Total                                                                                                                           388.46
+       Total due                                                                                                               GBP 388.46
+
+                                                      SELF BILLING INVOICE
+       Worker                                     Hirer                                     Worker ID                               Tax Point
+       Sam Example Worker Testing                 Kestrel One Test Productions L            1234567                              18 Mar 2025
+       1 Test Street                              Unit 1, Test Park
+                                                                                            NI Number
+       Test Road                                  Test Studios Place,
+                                                                                            QQ123456C
+       London                                     Test Lane  
+       London T1 1ST                              Testtown TT1 1TT   
+                                                  Project                                                                          Invoice No
+                                                  KESTREL ONE                                                                         100002
+                                    This self-billing invoice contains charges from the Worker to the Hirer.
+       Date                                                                                          Travel        H/C       Basic       Total
+       25 Feb 2025                                                                                    21.55        5.77      53.60      80.92
+       Total                                                                                                                            80.92
+       Total due                                                                                                                 GBP 80.92
+       Test Casting Limited               Registered office:               Address:                          Email: info@example.com     
+       Registered in England and Wales,  1 Agency Street                  1 Agency Street
+       company no: 00000000              Agencytown AA1 1AA              Agencytown AA1 1AA  
+       VAT registration no: GB000000000
+
+                                                     COMMISSIONS INVOICE
+       Client                                     Project                                                                                Date
+       Sam Example Worker Testing                 KESTREL ONE                                                                    18 Mar 2025
+                                                                                                                                Reference No
+                                                                                                                                 999/100002
+                                                                  Deductions
+       Date                                  Admin Fee*              VAT 20%    Agent Commission               VAT 20%                   Total
+       25 Feb 2025                                  8.09                  1.62                 8.09                 1.62                19.42
+       Total                                                                                                                            19.42
+                                                   *Entertainment Partners Administration Fee
+                                                             Deposit Summary
+       Total due from the Hirer                                                                                                        80.92
+       Less: Deductions as detailed above                                                                                             -19.42
+       Total deposited to your account                                                                                           GBP 61.50
+
+                                                                  PAYSLIP
+       Worker                                     Employer                                  Worker ID                             Payroll date
+       Sam Example Worker Testing                 Kestrel One Test Productions L            1234567                              18 Mar 2025
+       1 Test Street                              Unit 1, Test Park
+       Test Road                                  Test Studios Place,
+       London                                     Test Lane  
+       London T1 1ST                              Testtown TT1 1TT   
+                                                  Project                                                                       Reference No
+                                                  KESTREL ONE                                                                    999/100002
+                                                                                                                               Hours Worked
+                                                                                                                                         1.05
+       Date                                                                                          Travel        H/C       Basic       Total
+       25 Feb 2025                                                                                    21.55        5.77      53.60      80.92
+       Total                                                                                                                            80.92
+       Total due                                                                                                                 GBP 80.92

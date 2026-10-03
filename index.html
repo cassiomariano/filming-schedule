@@ -454,6 +454,10 @@ details.more summary{cursor:pointer;font-weight:600;display:flex;gap:8px;align-i
   main{padding-bottom:calc(88px + env(safe-area-inset-bottom,0px))}
   .toast{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
 }
+.taxbox{display:grid;grid-template-columns:1fr auto;gap:4px 16px;max-width:520px}
+.taxbox b{font-variant-numeric:tabular-nums}
+.bdtable{display:grid;grid-template-columns:auto repeat(calc(var(--cols) - 1),minmax(0,1fr));gap:2px 8px;font-size:12px;overflow-x:auto;font-variant-numeric:tabular-nums}
+.bdtable .h{color:var(--muted);font-family:var(--f-mono);font-size:10px;text-transform:uppercase}
 .three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .dlist{display:flex;flex-direction:column;gap:10px}
 .dcard{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
@@ -1246,7 +1250,7 @@ function moneyJobs(){
     const rate = savedRate ?? guess;
     const extras = numOrNull(p.extras) || 0;
     const all = Array.isArray(p.payments) ? p.payments : [];
-    const pays = all.filter(x => x.kind !== "invoice"), invoices = all.filter(x => x.kind === "invoice");
+    const pays = all.filter(x => x.kind !== "invoice" && x.kind !== "pending"), invoices = all.filter(x => x.kind === "invoice" || x.kind === "pending");
     const paid = pays.length ? pays.reduce((s, x) => s + (x.net || 0), 0) : (numOrNull(p.paid) || 0);
     const paidOn = pays.length ? pays.map(x => x.paidOn || "").sort().pop() : (p.paidOn || "");
     const fees = jobFees(c);
@@ -1273,52 +1277,73 @@ function earnedBetween(j, from, to){
 }
 const monthName = ym => { const [y, m] = ym.split("-").map(Number); return `${MONTHS[m - 1]} ${y}`; };
 
+/* every payment received (not invoices or payments still pending), with its job */
+function receivedPayments(jobs){
+  return jobs.flatMap(j => {
+    const ps = j.payments.filter(x => x.kind !== "invoice" && x.kind !== "pending");
+    if (!ps.length && j.paid) return [{x: {net: j.paid, paidOn: j.paidOn, gross: null}, j}];     // an amount typed before payments existed
+    return ps.map(x => ({x, j}));
+  });
+}
+S.moneyYear = load("moneyYear", "");
 function renderMoney(){
   const jobs = moneyJobs();
-  const ty = taxYear(TODAY);
-  const mFrom = TODAY.slice(0, 7) + "-01", mTo = TODAY.slice(0, 7) + "-31";
-  const tyEarned = jobs.reduce((s, j) => s + earnedBetween(j, ty.from, ty.to), 0);
-  const tyPaid = jobs.filter(j => j.paidOn >= ty.from && j.paidOn <= ty.to).reduce((s, j) => s + j.paid, 0);
-  const moEarned = jobs.reduce((s, j) => s + earnedBetween(j, mFrom, mTo), 0);
-  const moDays = jobs.reduce((s, j) => s + j.worked.filter(d => d >= mFrom && d <= mTo).length, 0);
-  const owing = jobs.filter(j => j.owed > 0);
-  const owed = owing.reduce((s, j) => s + j.owed, 0);
-  const overdue = jobs.filter(j => j.status === "overdue");
-  const noRate = jobs.filter(j => j.rate === null).length;
+  const pays = receivedPayments(jobs);
+  // tax years (6 April – 5 April) that have work or payments
+  const years = [...new Set([TODAY, ...jobs.flatMap(j => j.worked), ...pays.map(p => p.x.paidOn).filter(Boolean)].map(d => taxYear(d).from))].sort().reverse();
+  const ty = taxYear(years.includes(S.moneyYear) ? S.moneyYear : years[0]);
+  const inTy = d => d && d >= ty.from && d <= ty.to;
+  const got = pays.filter(p => inTy(p.x.paidOn));
+  const sum = (list, f) => Math.round(list.reduce((t, p) => t + (f(p) || 0), 0) * 100) / 100;
+  const net = sum(got, p => p.x.net), gross = sum(got, p => p.x.gross);
+  const commission = sum(got, p => p.x.commission), epFee = sum(got, p => p.x.ep);
+  const unsplit = sum(got, p => p.x.commission == null && p.x.ep == null ? p.x.fees : 0);
+  const vat = sum(got, p => p.x.vat);
+  const noGross = got.filter(p => p.x.gross == null).length;
+  const daysTy = jobs.reduce((t, j) => t + j.worked.filter(inTy).length, 0);
+  const owing = jobs.filter(j => j.owed > 0), owed = owing.reduce((t, j) => t + j.owed, 0);
+  const toCheck = jobs.filter(j => j.bad);
 
-  let h = `<div class="bar"><h2 class="month-title" style="margin:0">Money</h2><span class="src">${jobs.length} worked job${jobs.length===1?"":"s"}${noRate?` · ${noRate} without a day rate`:""}</span><span style="flex:1"></span>
-    ${jobs.length ? `<button class="btn small" data-moneycsv>Export CSV</button>` : ""}</div>
+  let h = `<div class="bar"><h2 class="month-title" style="margin:0">Money</h2><span style="flex:1"></span>
+    <button class="btn primary small" data-remit="">Add payments</button>${jobs.length ? `<button class="btn small" data-moneycsv>Export CSV</button>` : ""}</div>
+  <div class="legend" role="group" aria-label="Tax year"><span class="lab">Tax year</span>${years.map(y => `<button class="fchip" data-moneyyear="${y}" aria-pressed="${y === ty.from}">${taxYear(y).label}</button>`).join("")}</div>
   <div class="kpis">
-    <div class="kpi m"><span class="l">Tax year ${ty.label}</span><span class="n">${money(tyEarned)}</span><span class="s">earned since ${fmtDM(ty.from)} · ${money(tyPaid)} paid</span></div>
-    <div class="kpi m"><span class="l">This month</span><span class="n">${money(moEarned)}</span><span class="s">${moDays} day${moDays===1?"":"s"} worked in ${MONTHS[parse(TODAY).getMonth()]}</span></div>
-    <div class="kpi m"><span class="l">Owed to you</span><span class="n">${money(owed)}</span><span class="s">${owing.length} job${owing.length===1?"":"s"} unpaid or part paid</span></div>
-    <div class="kpi m"><span class="l">Overdue</span><span class="n"${overdue.length?' style="color:var(--attn)"':""}>${overdue.length}</span><span class="s">unpaid ${OVERDUE_DAYS}+ days after the last day</span></div>
-  </div>`;
+    <div class="kpi m"><span class="l">Received ${ty.label}</span><span class="n">${money(net)}</span><span class="s">${got.length} payment${got.length === 1 ? "" : "s"} deposited · ${daysTy} day${daysTy === 1 ? "" : "s"} worked</span></div>
+    <div class="kpi m"><span class="l">Gross before fees</span><span class="n">${money(gross)}</span><span class="s">${noGross ? `${noGross} payment${noGross === 1 ? "" : "s"} without a gross figure` : "what productions paid for your work"}</span></div>
+    <div class="kpi m"><span class="l">Owed to you</span><span class="n">${money(owed)}</span><span class="s">${owing.length} job${owing.length === 1 ? "" : "s"} not fully paid (all years)</span></div>
+    <div class="kpi m"><span class="l">To check</span><span class="n"${toCheck.length ? ' style="color:var(--attn)"' : ""}>${toCheck.length}</span><span class="s">payments that didn't add up</span></div>
+  </div>
+  <section class="panel"><h2>For your tax return · ${ty.label}</h2>
+    <div class="taxbox">
+      <span>Income (gross)</span><b class="num">${money(gross)}</b>
+      ${commission ? `<span>Agency commission</span><b class="num">${money(commission)}</b>` : ""}
+      ${epFee ? `<span>EP admin fees</span><b class="num">${money(epFee)}</b>` : ""}
+      ${unsplit ? `<span>Agency + EP fees (shown together on the payments page)</span><b class="num">${money(unsplit)}</b>` : ""}
+      <span>VAT on those fees</span><b class="num">${money(vat)}</b>
+      <span>Received in your bank</span><b class="num">${money(net)}</b>
+    </div>
+    <p class="src" style="margin:6px 0 0">Payments counted by the date they reached your bank (6 Apr ${ty.from.slice(0, 4)} – 5 Apr ${ty.to.slice(0, 4)}). A summary to help you, not tax advice: check how to report it with HMRC or an accountant.${noGross ? " Add the remittance PDFs for payments without a gross figure." : ""}</p>
+  </section>`;
+  // by agency, this tax year
+  const ag = new Map();
+  got.forEach(({x, j}) => { const k = j.c.agency || x.agency || "No agency"; if (!ag.has(k)) ag.set(k, {name: k, n: 0, gross: 0, fees: 0, net: 0}); const a = ag.get(k); a.n++; a.gross += x.gross || 0; a.fees += (x.commission != null || x.ep != null ? (x.commission || 0) + (x.ep || 0) : (x.fees || 0)) + (x.vat || 0); a.net += x.net || 0; });
+  if (ag.size) h += `<section class="panel"><h2>By agency · ${ty.label}</h2><div class="agt"><span class="h">Agency</span><span class="h num">Payments</span><span class="h num">Gross</span><span class="h num">Fees + VAT</span><span class="h num">Received</span>
+    ${[...ag.values()].sort((a, b) => b.net - a.net).map(a => `<span class="nm" title="${esc(a.name)}">${esc(a.name)}</span><span class="num">${a.n}</span><span class="num">${money(a.gross)}</span><span class="num">${money(a.fees)}</span><span class="num">${money(a.net)}</span>`).join("")}</div></section>`;
   if (!jobs.length){
-    main.innerHTML = h + `<div class="empty"><h2>No worked days yet</h2><p>Days you have worked (blue “done” days) appear here so you can track what each agency owes you.</p></div>`;
+    main.innerHTML = h + `<div class="empty"><h2>No worked days yet</h2><p>Days you have worked (blue “done” days) appear here. Add your EP remittance PDFs to fill in your history.</p></div>`;
     return;
   }
-  // by agency
-  const ag = new Map();
-  for (const j of jobs){
-    const k = j.c.agency || "No agency";
-    if (!ag.has(k)) ag.set(k, {name:k, days:0, expected:0, paid:0, owed:0});
-    const a = ag.get(k);
-    a.days += j.worked.length; a.expected += j.expected; a.paid += j.paid; a.owed += j.owed;
-  }
-  const agRows = [...ag.values()].sort((a, b) => b.expected - a.expected || a.name.localeCompare(b.name));
-  h += `<section class="panel"><h2>By agency</h2><div class="agt"><span class="h">Agency</span><span class="h num">Days</span><span class="h num">Expected</span><span class="h num">Paid</span><span class="h num">Owed</span>
-    ${agRows.map(a => `<span class="nm" title="${esc(a.name)}">${esc(a.name)}</span><span class="num">${a.days}</span><span class="num">${money(a.expected)}</span><span class="num">${money(a.paid)}</span><span class="num"${a.owed?' style="color:var(--attn)"':""}>${money(a.owed)}</span>`).join("")}</div></section>`;
-  // the jobs, grouped by the month of their last worked day
-  const months = [...new Set(jobs.map(j => j.last.slice(0, 7)))];
+  // the jobs worked in this tax year, by month of their last day
+  const list = jobs.filter(j => j.worked.some(inTy) || j.payments.some(x => inTy(x.paidOn)));
+  const months = [...new Set(list.map(j => j.last.slice(0, 7)))];
   for (const ym of months){
-    const list = jobs.filter(j => j.last.slice(0, 7) === ym);
-    const exp = list.reduce((s, j) => s + j.expected, 0), pd = list.reduce((s, j) => s + j.paid, 0);
+    const l = list.filter(j => j.last.slice(0, 7) === ym);
+    const exp = l.reduce((t, j) => t + j.expected, 0), pd = l.reduce((t, j) => t + j.paid, 0);
     h += `<div class="mmonth"><h3 class="wk">${monthName(ym)}</h3><span class="src">${money(exp)} expected · ${money(pd)} paid</span></div>
     <div class="mtable"><div class="mhead"><span>Production</span><span>Days worked</span><span class="num">Day rate</span><span class="num">Expected</span><span class="num">Paid</span><span class="num">Status</span></div>
-    ${list.map(moneyRowHTML).join("")}</div>`;
+    ${l.map(moneyRowHTML).join("")}</div>`;
   }
-  h += `<p class="src" style="margin:0">Expected = day rate × days worked + extras, minus the agency commission, EP fee and VAT the job's emails state (what should reach your bank). Tap a job to add its rate or a payment; paste remittances in the Done tab. Grey rates are guesses from the call's rate text.</p>`;
+  h += `<p class="src" style="margin:0">Expected = day rate × days worked + extras, minus the agency commission, EP fee and VAT (what should reach your bank). Tap a job for its payments, with each day's breakdown. Grey rates are guesses from the call's rate text.</p>`;
   main.innerHTML = h;
 }
 function moneyRowHTML(j){
@@ -1352,23 +1377,34 @@ function openPay(id){
       ${box("extras", "Extras (£) – overtime, travel…", numOrNull(p.extras), `placeholder="0"`)}</div>
       <div class="three">${box("fa", "Agency commission %", j.fees ? j.fees.agency : "", "placeholder=\"e.g. 10\"")}${box("fe", "EP admin fee %", j.fees ? j.fees.ep : "", "placeholder=\"0\"")}${box("fv", "VAT on fees %", j.fees ? (j.fees.plusVat ? j.fees.vat : 0) : "", "placeholder=\"20\"")}</div>
       <p class="src" style="margin:0">${j.fees ? "Fees: " + esc(feesText(j.fees)) + "." : "No fees found – type them if you know them."}</p>
-      ${j.payments.length ? `<div class="fld"><span class="lbl">Payments and invoices</span>${j.payments.map(payHTML).join("")}</div>`
+      ${j.payments.length ? `<div class="fld"><span class="lbl">Payments and invoices</span>${j.payments.map(x => payHTML(x)).join("")}</div>`
         : `<div class="two">${box("paid", "Amount paid (£)", numOrNull(p.paid), `placeholder="0"`)}
       <div class="fld"><label for="p-on">Paid on</label><input class="inp" id="p-on" type="date" value="${esc(p.paidOn || "")}"></div></div>`}
       <div class="fld"><label for="p-note">Note</label><input class="inp" id="p-note" value="${esc(p.note || "")}" placeholder="e.g. invoice sent 3 Oct"></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${j.payments.length ? "" : `<button class="btn small" data-payfull>Paid in full today</button>`}<button class="btn small" data-remit="${j.c.id}">Paste remittance or invoice</button></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${j.payments.length ? "" : `<button class="btn small" data-payfull>Paid in full today</button>`}<button class="btn small" data-remit="${j.c.id}">Add payment (PDF or text)</button></div>
       <p class="src" style="margin:0">Expected now: ${money(j.expected)}${j.fees ? ` (gross ${money(j.gross)} − fees)` : ""}. An empty day rate uses the £ amount from the call's rate text.</p>
     </div>
     <footer><button class="btn primary" data-paysave ${S.canWrite ? "" : "disabled"}>Save</button><button class="btn ghost" data-close>Cancel</button></footer>
   </aside>`;
 }
-/* one saved payment or invoice, with its checks */
-function payHTML(x){
-  const amt = (k, l) => x[k] !== null && x[k] !== undefined ? `<span>${l} ${money(x[k])}</span>` : "";
-  return `<div class="paybox"><div class="paytop"><b>${x.kind === "invoice" ? "Invoice" : x.kind === "manual" ? "Marked paid" : "Remittance"}</b> ${x.paidOn ? "· " + esc(fmtDM(x.paidOn)) : ""}
-      <span style="flex:1"></span><button class="btn small ghost" data-paydel="${esc(x.id)}" title="Remove this payment">✕</button></div>
-    <div class="payamts">${amt("gross", "Gross")}${amt("commission", "Commission")}${amt("ep", "EP fee")}${amt("vat", "VAT")}${amt("net", x.kind === "invoice" ? "Total" : "Net")}</div>
-    ${(x.days || []).length ? `<div class="src">Days: ${esc(x.days.map(fmtDay).join(", "))}</div>` : ""}
+/* one saved payment or invoice, with its day-by-day breakdown and its checks */
+const KIND_WORD2 = {invoice: "Invoice", manual: "Marked paid", pending: "Approved – not deposited yet", remittance: "Payment"};
+function breakdownHTML(x){
+  if (!(x.perDay || []).length) return "";
+  const cols = [...new Set(x.perDay.flatMap(r => Object.keys(r.parts || {})))];
+  const name = k => Money.PART_NAMES[k.toLowerCase()] || k;
+  return `<div class="bdtable" style="--cols:${cols.length + 2}"><span class="h">Day</span>${cols.map(k => `<span class="h num" title="${esc(k)}">${esc(name(k))}</span>`).join("")}<span class="h num">Total</span>
+    ${x.perDay.map(r => `<span>${esc(fmtDay(r.d))}</span>${cols.map(k => `<span class="num">${r.parts[k] !== undefined ? r.parts[k].toFixed(2) : "–"}</span>`).join("")}<span class="num"><b>${r.total !== null ? r.total.toFixed(2) : ""}</b></span>`).join("")}</div>`;
+}
+function payHTML(x, removable = true){
+  const amt = (v, l) => v !== null && v !== undefined ? `<span>${l} <b>${money(v)}</b></span>` : "";
+  const fees = x.ep !== null && x.ep !== undefined || x.commission !== null && x.commission !== undefined
+    ? amt(x.commission, "Commission") + amt(x.ep, "EP admin fee") : amt(x.fees, "Fees");
+  return `<div class="paybox"><div class="paytop"><b>${esc(KIND_WORD2[x.kind] || "Payment")}</b>${x.paidOn ? `&nbsp;· ${x.kind === "invoice" ? "sent" : x.source === "ep-pdf" && !x.deposited ? "invoice date" : "deposited"} ${esc(fmtDM(x.paidOn))}` : ""}${x.invoiceNo ? `&nbsp;· no. ${esc(x.invoiceNo)}` : ""}
+      <span style="flex:1"></span>${removable ? `<button class="btn small ghost" data-paydel="${esc(x.id)}" title="Remove this payment">✕</button>` : ""}</div>
+    <div class="payamts">${amt(x.gross, "Gross")}${fees}${amt(x.vat, "VAT")}${amt(x.net, x.kind === "invoice" ? "Total" : "Net")}</div>
+    ${(x.days || []).length ? `<div class="src">Days: ${esc(x.days.map(fmtDay).join(", "))}${x.hours ? ` · ${x.hours} hours` : ""}</div>` : ""}
+    ${breakdownHTML(x)}
     ${(x.checks || []).length ? `<ul class="checks">${x.checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what)}</li>`).join("")}</ul>` : ""}
     ${x.text ? `<details><summary class="src">What you pasted</summary><pre class="raw">${esc(x.text)}</pre></details>` : ""}</div>`;
 }
@@ -1410,7 +1446,7 @@ function renderDone(){
   const jobs = all.filter(pick[S.doneFilter] || pick.all);
   const n = k => all.filter(pick[k]).length;
   let h = `<div class="bar"><h2 class="month-title" style="margin:0">Jobs done</h2><span class="src">${all.length} job${all.length === 1 ? "" : "s"} with days worked</span><span style="flex:1"></span>
-    <button class="btn primary small" data-remit="">Paste remittance or invoice</button></div>
+    <button class="btn primary small" data-remit="">Add payments (PDFs or EP page)</button></div>
   <div class="legend" role="group" aria-label="Show">${[["all","All"],["unpaid","Not paid"],["paid","Paid"],["check","⚠ To check"]].map(([k, l]) =>
     `<button class="fchip" data-donef="${k}" aria-pressed="${S.doneFilter === k}">${l} · ${n(k)}</button>`).join("")}</div>`;
   if (!jobs.length){ main.innerHTML = h + `<div class="empty"><h2>Nothing here</h2><p>Days you worked (blue “done” days) appear here.</p></div>`; return; }
@@ -1422,7 +1458,7 @@ function renderDone(){
       <div class="ddays">${j.worked.map(d => `<span class="chip s-done">${esc(fmtDay(d))}</span>`).join("")}</div>
       <div class="dnums"><span>Expected ${j.gross ? `<b>${money(j.expected)}</b>${j.fees ? ` <small>(gross ${money(j.gross)})</small>` : ""}` : `<b>–</b> <small>add the day rate in Details, or paste the remittance</small>`}</span><span>Paid <b>${money(j.paid)}</b>${j.paidOn ? ` <small>on ${esc(fmtDM(j.paidOn))}</small>` : ""}</span>
         <small class="src">${esc(feesText(j.fees))}${j.rate === null ? " · no day rate yet" : ""}</small></div>
-      <div class="dbtns">${j.status !== "paid" ? `<button class="btn small" data-markpaid="${j.c.id}">✓ Mark paid</button>` : ""}<button class="btn small" data-remit="${j.c.id}">Paste remittance</button><button class="btn small ghost" data-pay="${j.c.id}">Details${j.payments.length ? ` · ${j.payments.length} payment${j.payments.length === 1 ? "" : "s"}` : ""}</button></div>
+      <div class="dbtns">${j.status !== "paid" ? `<button class="btn small" data-markpaid="${j.c.id}">✓ Mark paid</button>` : ""}<button class="btn small" data-remit="${j.c.id}">Add payment</button><button class="btn small ghost" data-pay="${j.c.id}">Details${j.payments.length ? ` · ${j.payments.length} payment${j.payments.length === 1 ? "" : "s"}` : ""}</button></div>
     </section>`;}).join("")}</div>`;
   main.innerHTML = h;
 }
@@ -1444,94 +1480,156 @@ function legacyPayments(c){
   return numOrNull(p.paid) ? [{id: "old", kind: "manual", paidOn: p.paidOn || "", gross: null, commission: null, ep: null, vat: null, net: numOrNull(p.paid), days: [], checks: []}] : [];
 }
 
-/* ---------- paste a remittance or invoice: read it, show what it says and the checks, then save ---------- */
+/* ---------- add payments: remittance PDFs, the EP payments page, or any remittance / invoice text ---------- */
 let remit = null;
+const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+async function loadPdfJs(){
+  if (window.pdfjsLib) return window.pdfjsLib;
+  await new Promise((ok, no) => { const sc = document.createElement("script"); sc.src = PDFJS + "pdf.min.js"; sc.onload = ok; sc.onerror = no; document.head.appendChild(sc); });
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js";
+  return window.pdfjsLib;
+}
+/* a PDF → its text with the columns kept (read on your phone; the file itself is never stored) */
+async function pdfText(file){
+  const lib = await loadPdfJs();
+  const doc = await lib.getDocument({data: new Uint8Array(await file.arrayBuffer())}).promise;
+  const pages = [];
+  for (let n = 1; n <= doc.numPages; n++){
+    const tc = await (await doc.getPage(n)).getTextContent();
+    pages.push(tc.items.map(i => ({s: i.str, x: i.transform[4], y: i.transform[5]})));
+  }
+  return Money.layoutText(pages);
+}
 function openRemit(forId){
-  remit = {forId: forId || "", text: "", r: null};
+  remit = {forId: forId || "", text: "", list: null, busy: false};
   drawRemit();
-  setTimeout(() => $("#rm-text", layer)?.focus(), 50);
 }
 function remitJobs(){ return moneyJobs().map(j => ({id: j.c.id, name: nameOf(j.c), agency: j.c.agency || "", worked: j.worked, j})); }
 function drawRemit(){
-  const r = remit.r;
   const jobs = remitJobs();
-  const opts = sel => `<option value="">Choose the job…</option>${jobs.map(x => `<option value="${x.id}"${x.id === sel ? " selected" : ""}>${esc(x.name)} · ${esc(x.agency)} · ${esc(fmtDM(x.worked[x.worked.length - 1]))}</option>`).join("")}`;
-  const inp = (k, l, v, type) => `<div class="fld"><label for="rm-${k}">${l}</label><input class="inp" id="rm-${k}" type="${type || "number"}" ${type ? "" : 'step="0.01" inputmode="decimal"'} value="${v ?? ""}"></div>`;
-  let body = `<div class="fld"><label for="rm-text">Paste the remittance (or your invoice) here – copy it from the email or PDF</label><textarea class="inp" id="rm-text" rows="8" placeholder="Remittance advice…">${esc(remit.text)}</textarea></div>
-    <div><button class="btn primary small" data-remitread>Read it</button></div>`;
-  if (r){
-    const targets = r.jobs.length ? r.jobs : [{id: remit.forId || "", days: r.days, share: 1}];
-    body += `<section class="panel" style="margin:0"><h2>What it says</h2>
-      <div class="fld"><span class="lbl">This is</span><div class="status-pick"><button type="button" data-rmkind="remittance" aria-pressed="${r.kind !== "invoice"}">A payment (remittance)</button><button type="button" data-rmkind="invoice" aria-pressed="${r.kind === "invoice"}">An invoice I sent</button></div></div>
-      <div class="three">${inp("gross", "Gross £", r.gross)}${inp("commission", "Commission £", r.commission)}${inp("ep", "EP fee £", r.ep)}</div>
-      <div class="three">${inp("vat", "VAT £", r.vat)}${inp("net", r.kind === "invoice" ? "Total £" : "Net paid £", r.net)}${inp("on", r.kind === "invoice" ? "Sent on" : "Paid on", r.paidOn || TODAY, "date")}</div>
-      ${r.days.length ? `<p class="src" style="margin:0">Days it pays: ${esc(r.days.map(fmtDay).join(", "))}</p>` : `<p class="src" style="margin:0">No work days found in it.</p>`}
-      ${targets.map((t, i) => {
-        const x = jobs.find(y => y.id === t.id);
-        const checks = x ? Money.checkPayment(scaled(r, t), x.j.fees, x.worked, x.j.rate) : [];
-        return `<div class="fld"><span class="lbl">${targets.length > 1 ? `Job ${i + 1} · ${Math.round(t.share * 100)}% of it` : "For the job"}</span>
-          <select class="inp" id="rm-job${i}">${opts(t.id)}</select>
-          ${x ? `<p class="src" style="margin:0">${esc(feesText(x.j.fees))}</p>` : ""}
-          ${checks.length ? `<ul class="checks">${checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what)}</li>`).join("")}</ul>` : ""}</div>`;
-      }).join("")}
-    </section>`;
+  const list = remit.list;
+  const opts = sel => `<option value="new"${sel === "new" ? " selected" : ""}>➕ Add it as a new worked job</option><option value="skip"${sel === "skip" ? " selected" : ""}>Don't save this one</option>
+    ${jobs.map(x => `<option value="${x.id}"${x.id === sel ? " selected" : ""}>${esc(x.name)} · ${esc(x.agency)} · ${esc(fmtDM(x.worked[x.worked.length - 1]))}</option>`).join("")}`;
+  let body = `<p class="src" style="margin:0">Best: the remittance PDFs (they give each day's breakdown) and the table from the same payments page (it gives the date the money reached your bank). Nothing personal from them is kept – only the figures.</p>
+    <div class="fld"><span class="lbl">Remittance PDFs (from your EP payments page – several at once is fine)</span>
+      <input class="inp" type="file" id="rm-pdf" accept="application/pdf,.pdf" multiple></div>
+    <div class="fld"><label for="rm-text">…or paste: the table from your EP payments page (select all its rows and copy), or a remittance / invoice text</label>
+      <textarea class="inp" id="rm-text" rows="6" placeholder="Project Name  Status  Remittance Advice  Deposit Date  Days Worked  Gross  Fees  VAT  Deposited…">${esc(remit.text)}</textarea></div>
+    <div><button class="btn primary small" data-remitread ${remit.busy ? "disabled" : ""}>${remit.busy ? "Reading…" : "Read them"}</button></div>`;
+  if (list){
+    body += `<p style="margin:0"><b>Found ${list.length} payment${list.length === 1 ? "" : "s"}.</b> Check the job each one goes to, then save.</p>`;
+    body += list.map((p, i) => {
+      const x = jobs.find(y => y.id === p.target);
+      const checks = Money.checkPayment(p, x ? x.j.fees : agencyFees(p.agency), x ? x.worked : p.days, x ? x.j.rate : null);
+      const editable = p.source === "text";
+      const inp = (k, l) => `<div class="fld"><label for="rm-${k}-${i}">${l}</label><input class="inp" id="rm-${k}-${i}" type="number" step="0.01" inputmode="decimal" value="${p[k] ?? ""}"></div>`;
+      return `<section class="panel" style="margin:0"><h2>${esc(p.project || "Payment " + (i + 1))}${p.agency ? ` · ${esc(p.agency)}` : ""}</h2>
+        ${editable ? `<div class="three">${inp("gross", "Gross £")}${inp("commission", "Commission £")}${inp("ep", "EP fee £")}</div><div class="three">${inp("vat", "VAT £")}${inp("net", p.status === "invoice" ? "Total £" : "Net paid £")}<div class="fld"><label for="rm-on-${i}">${p.status === "invoice" ? "Sent on" : "Paid on"}</label><input class="inp" type="date" id="rm-on-${i}" value="${esc(p.paidOn || TODAY)}"></div></div>`
+          : payHTML({...p, kind: p.status === "pending" ? "pending" : "remittance", checks: []}, false)}
+        <div class="fld"><label for="rm-job-${i}">For the job</label><select class="inp" id="rm-job-${i}" data-rmjob="${i}">${opts(p.target)}</select></div>
+        ${checks.length ? `<ul class="checks">${checks.map(k => `<li class="${k.ok ? "ok" : "bad"}">${k.ok ? "✓" : "⚠"} ${esc(k.what)}</li>`).join("")}</ul>` : ""}
+      </section>`;
+    }).join("");
   }
-  layer.innerHTML = `<div class="scrim" data-close></div><aside class="sheet" role="dialog" aria-label="Paste a remittance">
-    <header><h2>Remittance or invoice</h2><button class="btn small ghost" data-close aria-label="Close">✕</button></header>
+  layer.innerHTML = `<div class="scrim" data-close></div><aside class="sheet" role="dialog" aria-label="Add payments">
+    <header><h2>Add payments</h2><button class="btn small ghost" data-close aria-label="Close">✕</button></header>
     <div class="content">${body}</div>
-    <footer><button class="btn primary" data-remitsave ${r && S.canWrite ? "" : "disabled"}>Save to the job${r && r.jobs.length > 1 ? "s" : ""}</button><button class="btn ghost" data-close>Cancel</button></footer>
+    <footer><button class="btn primary" data-remitsave ${list && list.length && S.canWrite ? "" : "disabled"}>Save${list && list.length > 1 ? " all" : ""}</button><button class="btn ghost" data-close>Cancel</button></footer>
   </aside>`;
 }
-/* one job's part of a remittance that pays several jobs */
-function scaled(r, t){
-  const k = t.share, f = v => v === null || v === undefined ? null : Math.round(v * k * 100) / 100;
-  return {gross: f(r.gross), commission: f(r.commission), ep: f(r.ep), vat: f(r.vat), net: f(r.net), days: t.days && t.days.length ? t.days : r.days};
-}
-function readRemitNow(){
+async function readRemitNow(){
+  const files = [...($("#rm-pdf", layer)?.files || [])];
   remit.text = $("#rm-text", layer).value;
-  if (!remit.text.trim()){ toast("Paste the remittance first"); return; }
-  remit.r = Money.readRemittance(remit.text, remitJobs(), TODAY);
-  if (!remit.r.jobs.length && remit.forId) remit.r.jobs = [{id: remit.forId, days: remit.r.days, share: 1}];
+  if (!files.length && !remit.text.trim()){ toast("Choose the PDFs or paste the table first"); return; }
+  remit.busy = true; drawRemit();
+  try {
+    const texts = [];
+    for (const f of files){ try { texts.push(await pdfText(f)); } catch (e) { toast("Couldn't read " + f.name); } }
+    const jobs = remitJobs();
+    let list = [];
+    texts.forEach(t => { list = list.concat(Money.readPayments(t, jobs, TODAY)); });
+    if (remit.text.trim()) list = list.concat(Money.readPayments(remit.text, jobs, TODAY).map(p => p.source === "text" ? {...p, text: Money.redact(remit.text).slice(0, 6000)} : p));
+    // the same payment from its PDF and from the payments page: one, with the most of both
+    const merged = [];
+    list.forEach(p => { const m = merged.findIndex(q => Money.samePayment(q, p)); if (m === -1) merged.push(p); else merged[m] = Money.mergePayment(merged[m], p); });
+    merged.forEach(p => { p.target = p.job || (remit.forId && merged.length === 1 ? remit.forId : "new"); });
+    remit.list = merged;
+  } finally { remit.busy = false; }
   drawRemit();
 }
-/* your corrections in the boxes count before saving */
+/* your corrections (amounts typed, job chosen) count before saving */
 function pullRemit(){
-  const r = remit.r; if (!r) return;
-  const n = k => { const el = $("#rm-" + k, layer); return el ? numOrNull(el.value.trim()) : null; };
-  ["gross", "commission", "ep", "vat", "net"].forEach(k => r[k] = n(k));
-  r.paidOn = $("#rm-on", layer)?.value || TODAY;
-  const targets = r.jobs.length ? r.jobs : [{id: "", days: r.days, share: 1}];
-  targets.forEach((t, i) => { const v = $("#rm-job" + i, layer)?.value; if (v !== undefined) t.id = v; });
-  r.jobs = targets.filter(t => t.id);
+  (remit.list || []).forEach((p, i) => {
+    const sel = $("#rm-job-" + i, layer); if (sel) p.target = sel.value;
+    if (p.source !== "text") return;
+    ["gross", "commission", "ep", "vat", "net"].forEach(k => { const el = $(`#rm-${k}-${i}`, layer); if (el) p[k] = numOrNull(el.value.trim()); });
+    const on = $("#rm-on-" + i, layer); if (on) p.paidOn = on.value || TODAY;
+    p.fees = p.ep !== null || p.commission !== null ? Math.round(((p.ep || 0) + (p.commission || 0)) * 100) / 100 : p.fees;
+  });
+}
+/* what a payment keeps: the figures, never the PDF or anything that identifies you */
+function payRecord(p, fees, worked, rate){
+  const keep = ["source", "deposited", "project", "agency", "invoiceNo", "paidOn", "taxPoint", "days", "perDay", "hours", "gross", "ep", "epVat", "commission", "commissionVat", "fees", "vat", "net", "text"];
+  const out = {id: "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), kind: p.status === "invoice" ? "invoice" : p.status === "pending" ? "pending" : "remittance", savedAt: new Date().toISOString()};
+  keep.forEach(k => { if (p[k] !== undefined) out[k] = p[k]; });
+  out.checks = Money.checkPayment(out, fees, worked, rate);
+  return out;
 }
 async function saveRemit(){
   pullRemit();
-  const r = remit.r;
-  if (!r.jobs.length){ toast("Choose the job it's for"); return; }
-  if (r.net === null){ toast(r.kind === "invoice" ? "Type the invoice total" : "Type the amount paid"); return; }
-  const jobs = remitJobs();
+  const list = (remit.list || []).filter(p => p.target && p.target !== "skip");
+  if (!list.length){ toast("Nothing to save"); return; }
+  if (list.some(p => p.net === null)){ toast("A payment has no amount – type it first"); return; }
+  const jobs = remitJobs(), now = new Date().toISOString();
+  const batch = S.db.batch();
+  // payments for jobs you have
+  const byJob = new Map();
+  list.filter(p => p.target !== "new").forEach(p => { if (!byJob.has(p.target)) byJob.set(p.target, []); byJob.get(p.target).push(p); });
+  byJob.forEach((ps, id) => {
+    const x = jobs.find(y => y.id === id); if (!x) return;
+    let pays = legacyPayments(x.j.c);
+    ps.forEach(p => {
+      const rec = payRecord(p, x.j.fees, x.worked, x.j.rate);
+      const k = pays.findIndex(q => Money.samePayment(q, rec));
+      if (k === -1) pays.push(rec); else pays[k] = {...Money.mergePayment(pays[k], rec), id: pays[k].id, checks: rec.checks};
+    });
+    batch.update(S.db.collection("calls").doc(id), {"pay.payments": pays, updatedAt: now});
+  });
+  // jobs that weren't in your schedule (e.g. before it started): one per production + agency
+  const fresh = new Map();
+  list.filter(p => p.target === "new").forEach(p => { const k = (p.project || "Payment").toLowerCase() + "|" + (p.agency || "").toLowerCase(); if (!fresh.has(k)) fresh.set(k, []); fresh.get(k).push(p); });
+  let made = 0;
+  fresh.forEach(ps => {
+    const days = [...new Set(ps.flatMap(p => p.days || []))].sort();
+    const fees = agencyFees(ps[0].agency);
+    const project = (ps[0].project || "Payment").replace(/\b\w+/g, w => w.length > 2 ? w[0] + w.slice(1).toLowerCase() : w);
+    const dates = days.map(d => ({d, kind: "film", state: "worked"}));
+    const id = "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) + made;
+    const job = {...blankCall(), project, agency: ps[0].agency || "", status: "done", dates, received: days[0] || TODAY, source: "payment", notes: "Added from a payment",
+      createdAt: now, updatedAt: now, agencyKey: agencyKeyOf(ps[0].agency), mine: {}, names: [], records: [], needsDerive: true,
+      base: {at: now, status: "done", dates, project, agency: ps[0].agency || "", role: "", received: days[0] || TODAY},
+      pay: {payments: ps.map(p => payRecord(p, fees, days, null))}};
+    batch.set(S.db.collection("calls").doc(id), job);
+    made++;
+  });
   try {
-    const batch = S.db.batch();
-    for (const t of r.jobs){
-      const x = jobs.find(y => y.id === t.id); if (!x) continue;
-      const part = scaled(r, t);
-      const pay = {id: "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind: r.kind, paidOn: r.paidOn, ...part,
-        text: remit.text.slice(0, 6000), savedAt: new Date().toISOString(), checks: Money.checkPayment(part, x.j.fees, x.worked, x.j.rate)};
-      batch.update(S.db.collection("calls").doc(t.id), {"pay.payments": legacyPayments(x.j.c).concat([pay]), updatedAt: new Date().toISOString()});
-    }
     await batch.commit();
-    toast(r.kind === "invoice" ? "Invoice saved" : "Payment saved");
+    toast(`Saved ${list.length} payment${list.length === 1 ? "" : "s"}${made ? ` · ${made} new worked job${made === 1 ? "" : "s"} added` : ""}`);
     closeSheet(); render();
   } catch (e) { writeFailed(e); }
 }
 
 /* the money table as a spreadsheet */
 function exportMoneyCSV(){
-  const rows = [["Month","Production","Agency","Days worked","Worked dates","Day rate","Rate is estimate","Extras","Gross","Fees","Expected (net)","Paid","Paid on","Status","Note"]];
-  for (const j of moneyJobs()){
-    rows.push([monthName(j.last.slice(0, 7)), nameOf(j.c), j.c.agency || "", j.worked.length, j.worked.map(fmtDay).join(", "),
-      j.rate ?? "", j.estimate ? "yes" : "", j.extras || "", j.gross.toFixed(2), feesText(j.fees), j.expected.toFixed(2), j.paid.toFixed(2), j.paidOn, PAY_CHIP[j.status][0] + (j.bad ? " (check)" : ""), j.note]);
-  }
+  const rows = [["Tax year","Deposited","Production","Agency","Days worked","Gross","Agency commission","EP admin fee","Fees (not split)","VAT on fees","Received","Invoice no","Checks"]];
+  receivedPayments(moneyJobs()).sort((a, b) => String(a.x.paidOn).localeCompare(String(b.x.paidOn))).forEach(({x, j}) => {
+    const split = x.commission != null || x.ep != null;
+    rows.push([x.paidOn ? taxYear(x.paidOn).label : "", x.paidOn || "", nameOf(j.c), j.c.agency || x.agency || "", (x.days && x.days.length ? x.days : j.worked).join(" "),
+      x.gross ?? "", split ? (x.commission ?? "") : "", split ? (x.ep ?? "") : "", split ? "" : (x.fees ?? ""), x.vat ?? "", x.net ?? "", x.invoiceNo || "",
+      (x.checks || []).some(k => !k.ok) ? "CHECK: " + x.checks.filter(k => !k.ok).map(k => k.what).join("; ") : (x.checks || []).length ? "ok" : ""]);
+  });
+  rows.push([]); rows.push(["Not paid yet"]); rows.push(["Production","Agency","Days worked","Expected (net)","Paid so far","Status"]);
+  moneyJobs().filter(j => j.owed > 0).forEach(j => rows.push([nameOf(j.c), j.c.agency || "", j.worked.join(" "), j.expected.toFixed(2), j.paid.toFixed(2), PAY_CHIP[j.status][0]]));
   const csv = rows.map(r => r.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
   saveFile(`filming-money-${TODAY}.csv`, "﻿" + csv, "text/csv");
 }
@@ -2131,11 +2229,11 @@ document.addEventListener("click", e => {
   if ("payfull" in ds){ payFull(); return; }
   if ("paysave" in ds){ savePay(); return; }
   if ("moneycsv" in ds){ exportMoneyCSV(); return; }
+  if (ds.moneyyear){ S.moneyYear = ds.moneyyear; save("moneyYear", S.moneyYear); render(); return; }
   if (ds.donef){ S.doneFilter = ds.donef; save("doneFilter", S.doneFilter); render(); return; }
   if (ds.markpaid){ markPaid(ds.markpaid); return; }
   if (ds.remit !== undefined){ openRemit(ds.remit); return; }
   if ("remitread" in ds){ readRemitNow(); return; }
-  if (ds.rmkind && remit && remit.r){ pullRemit(); remit.r.kind = ds.rmkind; drawRemit(); return; }
   if ("remitsave" in ds){ saveRemit(); return; }
   if (ds.paydel){ delPayment(ds.paydel); return; }
   if ("health" in ds){ openHealth(); return; }
@@ -2156,6 +2254,7 @@ document.addEventListener("change", e => {
   if (e.target.id === "statusSel"){ S.listStatus = e.target.value; save("listStatus", S.listStatus); renderCalls(); }
   if (e.target.id === "agencySel"){ S.agency = e.target.value; renderCalls(); }
   if (e.target.id === "sortSel"){ S.sort = e.target.value; save("sort", S.sort); renderCalls(); }
+  if (e.target.dataset && e.target.dataset.rmjob !== undefined && remit && remit.list){ pullRemit(); drawRemit(); return; }
   if (e.target.dataset && e.target.dataset.filesel && e.target.value){ fileEmail(e.target.dataset.filesel, e.target.value); if (draft) closeSheet(); }
 });
 // remember whether "Fix this job" is open, so it stays open when the editor redraws
