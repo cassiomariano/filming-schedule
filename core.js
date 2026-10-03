@@ -22,7 +22,7 @@
 
   // ---------- names ----------
   // Words that describe a job but are not its name: never used to join two jobs
-  var PLACEHOLDER = /^(tbc|tba|untitled|unknown|unnamed|confidential|commercial|advert|advertisement|feature|featurefilm|film|tv|tvseries|tvdrama|tvshow|series|drama|project|newproject|musicvideo|featuredrole|featured|role|sa|sas|supportingartists?|background|extras?|standin|photodouble|majorstudiofeature(film)?|pencil|pencilled|option|firstoption|secondoption|majorstudiofilm|studiofeature|netflixseries|bbcdrama|availability|availabilitycheck|avcheck|tomorrow|today|urgent|reminder|question|update|release|booking|thankyou|thanks|castingcollective|extrapeople|two10casting|two10|keycasting|lucasextras|bbbtalent|sabellcasting|theartistbook|trueedge|onsetextras|universalextras|wilkinscasting)$/;
+  var PLACEHOLDER = /^(tbc|tba|untitled|unknown|unnamed|confidential|commercial|advert|advertisement|feature|featurefilm|film|tv|tvseries|tvdrama|tvshow|series|drama|project|newproject|musicvideo|featuredrole|featured|role|sa|sas|supportingartists?|background|extras?|standin|photodouble|majorstudiofeature(film)?|pencil|pencilled|option|firstoption|secondoption|majorstudiofilm|studiofeature|netflixseries|bbcdrama|availability|availabilitycheck|avcheck|tomorrow|today|urgent|reminder|question|update|release|booking|thankyou|thanks|castingcollective|extrapeople|exp|cc|ttc|bbb|kc|le|ep|two10casting|two10|keycasting|lucasextras|bbbtalent|sabellcasting|theartistbook|trueedge|onsetextras|universalextras|wilkinscasting)$/;
   function normName(s) {
     return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
   }
@@ -409,6 +409,18 @@
 
     var md = mine.days || {};
     var status, dates;
+    // The newest information wins: your change counts over every email that came before it; an email
+    // that arrives AFTER your change (about that day, or about the whole job) updates it again.
+    var AFFECTS = { call: 1, replied: 1, booked: 1, released: 1, calltime: 1 };
+    function newerNews(at, d) {
+      if (!at) return false;
+      return recs.some(function (r) {
+        if (!AFFECTS[r.kind] || !(String(r.at) > String(at))) return false;
+        if (!d) return true;
+        var p = r.parsed || {}, listed = (p.dates || []).map(function (x) { return x.d; }).concat(((p.call || {}).dates) || []);
+        return listed.length ? listed.indexOf(d) !== -1 : r.kind !== "call" && r.kind !== "calltime";
+      });
+    }
     if (base.at && !recs.length) {
       // nothing new since the job was saved: it stays exactly as it was, plus your own changes
       dates = (base.dates || []).filter(function (e) { return e && /^\d{4}-\d\d-\d\d$/.test(e.d || ""); }).map(function (e) { return copy(e); });
@@ -418,21 +430,21 @@
         if (o.removed) { if (i !== -1) dates.splice(i, 1); return; }
         var e = i !== -1 ? dates[i] : (dates.push({ d: d, kind: o.kind || "film" }), dates[dates.length - 1]);
         if (o.kind) e.kind = o.kind;
-        if (o.state !== undefined) { delete e.done; if (o.state) e.state = o.state; else delete e.state; }
+        if (o.state) { delete e.done; e.state = o.state; }
         ["callTime", "loc", "callPlace"].forEach(function (k) { if (o[k] !== undefined) { if (o[k]) e[k] = o[k]; else delete e[k]; } });
         if (o.night !== undefined) { if (o.night) e.night = true; else delete e.night; }
       });
       dates.sort(function (a, b) { return a.d < b.d ? -1 : a.d > b.d ? 1 : 0; });
       status = mine.status || base.status || "pending";
     } else {
+    // (emails arrived since the job was saved: the days are worked out from them)
     // ---- your own changes always win ----
     Object.keys(md).forEach(function (d) {
       var o = md[d] || {};
       if (o.removed) { delete days[d]; return; }
       var dd = day(d, o.kind);
       if (o.kind) dd.kind = o.kind;
-      if (o.state) dd.st = o.state === "worked" ? "worked" : o.state;
-      if (o.state === "") { /* back to automatic */ }
+      if (o.state && !newerNews(o.at, d)) dd.st = o.state;
       ["callTime", "loc", "callPlace"].forEach(function (k) { if (o[k] !== undefined) { if (o[k]) dd[k] = o[k]; else delete dd[k]; } });
       if (o.night !== undefined) { if (o.night) dd.night = true; else delete dd.night; }
     });
@@ -448,7 +460,7 @@
     else if (list.length) status = list.some(function (x) { return x.st === "declined"; }) && !list.some(function (x) { return x.st === "released" || x.st === "canceled"; }) ? "declined" : "released";
     else status = answered || base.status || "pending";
     if (status === "confirmed" && !has("booked") && base.status === "done") status = "done";
-    if (mine.status) status = mine.status;
+    if (mine.status && !newerNews(mine.statusAt)) status = mine.status;
 
     // ---- days as the app shows them ----
     var shown = { confirmed: "booked", done: "worked", available: "available", pending: "pending", declined: "declined", released: "released", canceled: "canceled" }[status];

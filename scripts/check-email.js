@@ -70,7 +70,11 @@ function indexLine(id, job) {
 }
 function setIndex(id, job) { INDEX[id] = indexLine(id, job); indexDirty = true; }
 async function saveMeta() {
-  if (indexDirty) await db.collection("meta").doc("index").set({ jobs: INDEX, at: nowIso(), v: Core.VERSION });
+  if (indexDirty) {
+    const keep = new Date(Date.now() - 400 * 864e5).toISOString().slice(0, 10);
+    Object.keys(INDEX).forEach(id => { const e = INDEX[id]; if (e.l && e.l < keep) delete INDEX[id]; });
+    await db.collection("meta").doc("index").set({ jobs: INDEX, at: nowIso(), v: Core.VERSION });
+  }
   if (mailDirty) await db.collection("meta").doc("mail").set({ folders: MAIL, at: nowIso() });
 }
 function knownAgencyNames() { return [...new Set(Object.values(INDEX).map(e => e.an).filter(Boolean))]; }
@@ -149,7 +153,8 @@ async function readFolder(client, account, ai, folder, windowDays, found, counts
   if (windowDays == null && w && w.v === validity) {
     uids = ((await client.search({ uid: `${w.last + 1}:*` }, { uid: true })) || []).filter(u => u > w.last);
   } else {
-    uids = (await client.search({ since: new Date(Date.now() - (windowDays || 3) * 864e5) }, { uid: true })) || [];
+    // a folder seen for the first time (or renumbered by Yahoo): the last 14 days
+    uids = (await client.search({ since: new Date(Date.now() - (windowDays || 14) * 864e5) }, { uid: true })) || [];
   }
   let maxUid = w && w.v === validity ? w.last : 0;
   for (let i = 0; i < uids.length; i += 200) {
@@ -164,8 +169,8 @@ async function readFolder(client, account, ai, folder, windowDays, found, counts
       found.push({ key, uid: msg.uid, folder, agency, ai, date: env.date ? new Date(env.date).toISOString() : nowIso() });
     }
   }
-  // the folder is only marked as read up to here once all of it was looked at (a failed run reads it again)
-  if (windowDays == null || !w) { MAIL[wkey] = { v: validity, last: maxUid, at: nowIso() }; mailDirty = true; }
+  // returned, not saved yet: the folder is marked as read only after its emails are safely stored
+  return (windowDays == null || !w) ? { wkey, mark: { v: validity, last: maxUid, at: nowIso() } } : null;
 }
 // downloads the found emails that have no record yet and turns them into records
 async function download(client, account, ai, list, counts) {
@@ -176,7 +181,6 @@ async function download(client, account, ai, list, counts) {
   const out = [];
   for (const x of list) {
     if (have.has(x.key) || seenThisRun.has(x.key)) { counts.known++; continue; }
-    seenThisRun.add(x.key);
     const lock = await client.getMailboxLock(x.folder.path);
     let mail;
     try {
@@ -204,12 +208,19 @@ async function download(client, account, ai, list, counts) {
     // from a sender that isn't an agency, only call sheets and availability requests are kept
     // (a hotel or flight "booking confirmation" is not a job)
     if (!x.agency && !["calltime", "call"].includes(rec.kind)) continue;
+    seenThisRun.add(x.key);
     out.push(rec);
     counts.newRecords++;
   }
   return out;
 }
 const seenThisRun = new Set();
+// inbox positions to save once their emails are stored (an email that fails keeps its folder's old position)
+const pendingMarks = [];
+const failedKeys = new Set();
+function commitMarks() {
+  pendingMarks.forEach(p => { if (p.mark && !p.keys.some(k => failedKeys.has(k))) { MAIL[p.mark.wkey] = p.mark.mark; mailDirty = true; } });
+}
 async function readInboxes(windowDays) {
   const all = [];
   let failed = 0;
@@ -225,8 +236,11 @@ async function readInboxes(windowDays) {
             if (!client.usable) client = await connect(account);
             const found = [];
             const lock = await client.getMailboxLock(folder.path);
-            try { await readFolder(client, account, ai, folder, windowDays, found, counts); } finally { lock.release(); }
-            all.push(...await download(client, account, ai, found, counts));
+            let mark;
+            try { mark = await readFolder(client, account, ai, folder, windowDays, found, counts); } finally { lock.release(); }
+            const got = await download(client, account, ai, found, counts);
+            all.push(...got);
+            pendingMarks.push({ mark, keys: got.map(r => r.key) });
             counts.folders++; ok = true;
           } catch (e) {
             if (e.authenticationFailed) throw e;
@@ -272,7 +286,7 @@ async function fileRecord(rec, fresh) {
   }
   // the same email a second time (e.g. a copy in the other inbox): listed on the same job, never applied twice
   if (!rec.copyOf) {
-    const same = await db.collection("records").where("subject", "==", rec.subject).get();
+    const same = await db.collection("records").where("subject", "==", rec.subject).where("account", "==", "").limit(5).get();
     const orig = same.docs.map(d => d.data()).find(o => isCopy(o, rec) && String(o.seen || o.at) <= String(rec.seen || nowIso()));
     if (orig) {
       rec.copyOf = orig.key;
@@ -290,6 +304,12 @@ async function fileRecord(rec, fresh) {
     if (facts && facts.project && !rec.parsed.project) { rec.parsed.project = facts.project; rec.parsed.names = [facts.project].concat(rec.parsed.names || []); }
   }
   const m = Core.matchRecord(rec, INDEX);
+  if (m.job && m.sure && !(await db.collection("calls").doc(m.job).get()).exists) {
+    // that job was deleted or merged in the app: forget it and file the email again
+    delete INDEX[m.job]; indexDirty = true;
+    if (rec.userJob === m.job) { rec.userJob = null; await ref.set({ userJob: null }, { merge: true }).catch(() => {}); }
+    return fileRecord(rec, fresh);
+  }
   if (m.job && m.sure) {
     const ch = { records: FieldValue.arrayUnion(rec.key), needsDerive: true };
     if (rec.messageId) ch.threads = FieldValue.arrayUnion(rec.messageId);
@@ -304,14 +324,15 @@ async function fileRecord(rec, fresh) {
     return;
   }
   // an email more than 30 days old (found late, e.g. moved into a folder) never starts a new job
-  if (!m.job && m.sure && Date.now() - new Date(rec.at).getTime() > 30 * 864e5) {
+  if (!m.job && m.sure && !rec.userJob && Date.now() - new Date(rec.at).getTime() > 30 * 864e5) {
     await ref.set({ ...clean(rec), job: null, state: "ignored", how: m.how, why: "An old email (more than 30 days) – not added as a new job", candidates: [], filedAt: nowIso() }, { merge: true });
     stats.ignored++;
     return;
   }
   if (!m.job && m.sure) {
     // a new job
-    const id = "e" + rec.key;
+    let id = "e" + rec.key;
+    if ((await db.collection("calls").doc(id).get()).exists) id = "e" + rec.key + "-" + Date.now().toString(36);   // never over another job
     const job = { source: "email (" + String(rec.account) + ")", base: {}, pages: facts ? { [rec.pages[0]]: facts } : {}, mine: {}, names: [],
       records: [rec.key], threads: rec.messageId ? [rec.messageId] : [], createdAt: nowIso(), attention: false, needsDerive: true };
     await db.collection("calls").doc(id).set(job);
@@ -329,23 +350,34 @@ async function fileRecord(rec, fresh) {
 // where an email the robot isn't sure about goes: your Check list only when it would change something
 function unsureState(rec, m) {
   if (rec.kind === "calltime" && !((rec.parsed || {}).call || {}).time) return "other";   // "call details to follow": nothing to file yet
-  return m.candidates.length || rec.kind === "booked" || rec.kind === "calltime" ? "check" : "ignored";
+  if (m.candidates.length || rec.kind === "booked" || rec.kind === "calltime") return "check";
+  // a release or answer naming a production not in your list yet (e.g. its request is still to come): tried again for 14 days
+  if ((rec.kind === "released" || rec.kind === "replied") && Date.now() - new Date(rec.seen || nowIso()).getTime() < 14 * 864e5) return "waiting";
+  return "ignored";
 }
 // "seen": when the robot first saw the email (an email seen after a job was saved still counts, even if it is dated earlier)
 // the same email twice: same subject, same text, sent within 4 days (two releases on different days differ in their text)
-const textStart = r => String(r.text || "").replace(/\s+/g, " ").trim().slice(0, 400);
-function isCopy(a, b) { return a.key !== b.key && a.subject === b.subject && textStart(a) === textStart(b) && Math.abs(new Date(a.at) - new Date(b.at)) <= 4 * 864e5; }
+// (only against emails kept from the old robot, which have no message id: a real email always has one, so it can't be a copy)
+const textStart = r => String(r.text || "").replace(/\s+/g, " ").trim().slice(0, 2000);
+function isCopy(a, b) { return a.key !== b.key && (!a.messageId || !b.messageId) && a.subject === b.subject && textStart(a) === textStart(b) && Math.abs(new Date(a.at) - new Date(b.at)) <= 4 * 864e5; }
 function clean(rec) { const { allUrls: _a, knownAgencies: _k, ...r } = rec; r.seen = r.seen || nowIso(); return JSON.parse(JSON.stringify(r)); }
 
 // the Check list (and emails you moved in the app) is tried again on every run
 async function retryChecks() {
-  const snap = await db.collection("records").where("state", "==", "check").get();
+  const snap = await db.collection("records").where("state", "in", ["check", "waiting"]).limit(60).get();
   for (const d of snap.docs) {
+    try { await retryOne(d); } catch (e) { report("warning", "Check list", "One email couldn't be retried (" + (e.code || e.name) + ")."); }
+  }
+}
+async function retryOne(d) {
+  {
     const rec = d.data();
-    if (rec.userJob === "ignore") { await d.ref.update({ state: "ignored", why: "You chose to ignore it", job: null }); continue; }
+    // you filed it on a job that no longer exists: back to your Check list
+    if (rec.userJob && rec.userJob !== "new" && rec.userJob !== "ignore" && !INDEX[rec.userJob]) { await d.ref.update({ userJob: null, state: "check" }); return; }
+    if (rec.userJob === "ignore") { await d.ref.update({ state: "ignored", why: "You chose to ignore it", job: null }); return; }
     const before = rec.job || null;
     const m = Core.matchRecord(rec, INDEX);
-    if (!m.sure && !rec.userJob && unsureState(rec, m) !== "check") { await d.ref.update({ state: unsureState(rec, m) }); continue; }
+    if (!m.sure && !rec.userJob && unsureState(rec, m) !== rec.state) { await d.ref.update({ state: unsureState(rec, m) }); return; }
     if ((m.job && m.sure) || (!m.job && m.sure)) {
       if (before && before !== m.job) {
         await db.collection("calls").doc(before).update({ records: FieldValue.arrayRemove(rec.key), needsDerive: true }).catch(() => {});
@@ -432,7 +464,8 @@ async function dailyCheck() {
   if (MODE === "normal") {
     const r = await readInboxes(7);
     out.missing = r.records.length;
-    for (const rec of r.records) await fileRecord(rec, false);
+    for (const rec of r.records) { try { await fileRecord(rec, false); } catch (e) { failedKeys.add(rec.key); } }
+    commitMarks();
   }
   // 2) upkeep: emails the robot read itself are read again when the rules improved; copies are marked;
   //    jobs made only from old emails (found late) are removed
@@ -443,7 +476,8 @@ async function dailyCheck() {
   // 3) every job comes out the same when rebuilt from scratch (fixes any that don't)
   const byJob = {};
   recs.forEach(r => { if (r.job) (byJob[r.job] = byJob[r.job] || []).push(r); if (r.state === "check") out.check++; });
-  INDEX = {};
+  const OLD = INDEX; INDEX = {};
+  try {
   for (const doc of calls) {
     const job = doc.data();
     const d = Core.deriveJob(job, byJob[doc.id] || []);
@@ -451,6 +485,7 @@ async function dailyCheck() {
     if (differs) { out.rebuiltDiffer++; await deriveAndSave(doc.id, null, true); }
     else setIndex(doc.id, { ...job, recordDates: (byJob[doc.id] || []).map(r => String(r.at).slice(0, 10)), pageCodes: (byJob[doc.id] || []).flatMap(r => r.pages || []) });
   }
+  } catch (e) { INDEX = OLD; throw e; }            // never save a half-built index
   // 4) jobs that look like copies of each other (same production + agency + time): offered to you in the Check list
   const dismissed = new Set(((await db.collection("meta").doc("duplicates").get()).data() || {}).dismissed || []);
   const list = calls.map(d => ({ id: d.id, ...d.data() }));
@@ -472,7 +507,7 @@ async function upkeep(calls, recs) {
   const res = { reread: 0, copies: 0, removed: 0, changed: 0 };
   const touched = new Set();
   // a) read again with the current rules (only emails the robot read itself: their full text is stored)
-  for (const r of recs.filter(r => r.account && (r.v || 1) < Core.VERSION)) {
+  for (const r of recs.filter(r => r.account && (r.v || 1) < Core.VERSION && r.via !== "EP page" && !r.userJob)) {
     const again = Core.recordFromEmail({ key: r.key, at: r.at, account: r.account, folder: r.folder, from: r.from, subject: r.subject, text: r.text,
       links: r.links, messageId: r.messageId, knownAgencies: knownAgencyNames() });
     const ch = { v: Core.VERSION, parsed: JSON.parse(JSON.stringify(again.parsed)) };
@@ -505,7 +540,7 @@ async function upkeep(calls, recs) {
   for (const doc of calls) {
     const j = doc.data();
     if (j.base && j.base.at) continue;                       // your jobs and jobs saved at the switch are never removed this way
-    if (j.mine && Object.keys(j.mine).length) continue;      // you changed it: it stays
+    if ((j.mine && Object.keys(j.mine).length) || j.notes || j.pay || j.attention) continue;      // you changed it: it stays
     const mine = recs.filter(r => r.job === doc.id);
     if (!mine.length || !mine.every(r => new Date(r.seen || r.at) - new Date(r.at) > 30 * 864e5)) continue;
     for (const r of mine) await db.collection("records").doc(r.key).update({ job: null, state: "ignored", why: "An old email (more than 30 days) – not added as a new job" });
@@ -622,9 +657,10 @@ async function writeAll(coll, items, idOf) {
     failed = r.failed;
     for (const rec of r.records) {
       try { await fileRecord(rec, MODE === "normal" && Date.now() - new Date(rec.at).getTime() < 3 * 864e5); }
-      catch (e) { report("warning", "Email", "One email couldn't be filed (" + (e.code || e.name) + "); the daily self-check will read it again."); }
+      catch (e) { failedKeys.add(rec.key); report("warning", "Email", "One email couldn't be filed (" + (e.code || e.name) + "); it will be read again next run."); }
     }
-    await retryChecks();
+    commitMarks();
+    try { await retryChecks(); } catch (e) { report("warning", "Check list", "Couldn't retry the Check list (" + (e.code || e.name) + ")."); }
     const marked = await db.collection("calls").where("needsDerive", "==", true).get();
     marked.docs.forEach(d => { if (!dirty.has(d.id)) markDirty(d.id, null, false); });
     try { await refreshPages(); } catch (e) { report("warning", "EP pages", "Could not refresh EP pages (" + (e.code || e.name) + ")."); }

@@ -655,7 +655,8 @@ async function cycleDay(id, i){
   if (next) e.state = next; else delete e.state;
   try {
     // kept as YOUR change: the robot never overwrites it
-    await S.db.collection("calls").doc(id).update({dates, ["mine.days." + e.d + ".state"]: next || "", needsDerive: true, updatedAt: new Date().toISOString()});
+    const now = new Date().toISOString();
+    await S.db.collection("calls").doc(id).update({dates, ["mine.days." + e.d + ".state"]: next || "", ["mine.days." + e.d + ".at"]: now, needsDerive: true, updatedAt: now});
     toast(`${nameOf(c)} · ${fmtShort(e.d)}: ${CYCLE_WORDS[next]}`);
   } catch (err) { writeFailed(err); }
 }
@@ -1462,7 +1463,7 @@ function robotHTML(d){
   if (nd) parts.push(`${nd} day${nd === 1 ? "" : "s"}`);
   if (!parts.length) return "";
   return `<section class="robot">
-    <div class="last"><span>Your changes on this job: <b>${esc(parts.join(", "))}</b>. New emails never undo them.</span>
+    <div class="last"><span>Your changes on this job: <b>${esc(parts.join(", "))}</b>. They count over every email that came before them; a newer email about the same day updates it.</span>
       <button class="btn small" data-undo ${S.canWrite ? "" : "disabled"}>Undo my changes</button></div>
   </section>`;
 }
@@ -1611,7 +1612,9 @@ async function mergeJobs(){
   out.base = {at: now, status, dates, project: out.project || "", agency: out.agency || "", role: out.role || "", received: out.received || "",
     location: out.location || "", fitLocation: out.fitLocation || "", filmLocation: out.filmLocation || "", rate: out.rate || "", respondBy: out.respondBy || null, links, answers};
   out.mine = {};
-  if (other.project && other.project !== out.project) out.names = firebase.firestore.FieldValue.arrayUnion(other.project);
+  const names = [other.project, ...(other.names || [])].filter(n => n && n !== out.project);
+  if (names.length) out.names = firebase.firestore.FieldValue.arrayUnion(...names);
+  if ((other.threads || []).length) out.threads = firebase.firestore.FieldValue.arrayUnion(...other.threads);
   try {
     // the other job's emails move here; both changes in one go (either both happen or neither does)
     const recs = await S.db.collection("records").where("job", "==", otherId).get();
@@ -1644,7 +1647,7 @@ async function splitJob(){
   const newJob = {...blankCall(), project: draft.project, role: draft.role || "", status: draft.status, agency, dates: moved,
     location: draft.location || "", fitLocation: draft.fitLocation || "", filmLocation: draft.filmLocation || "", rate: draft.rate || "",
     received: draft.received || TODAY, source: "split", notes: `Split off from the ${draft.agency || "other"} job`, createdAt: now, updatedAt: now,
-    agencyKey: agencyKeyOf(agency), mine: {}, names: [], records: []};
+    agencyKey: agencyKeyOf(agency), mine: {}, names: [], records: [], needsDerive: true};
   newJob.base = snap(newJob, moved);
   // this job keeps the other days, saved as they are now (its emails stay on it; move one with "Move this email")
   const body = {dates: kept, base: snap(draft, kept), mine: {}, needsDerive: true, updatedAt: now};
@@ -1743,7 +1746,7 @@ async function saveDraft(){
   try {
     if (!draftId){
       // a job you add yourself: saved as it is ("base"), emails about it later add to it
-      const body = {...draft, review: false, reviewReason: "", createdAt: now, updatedAt: now, agencyKey: agencyKeyOf(draft.agency), mine: {}, names: [], records: [],
+      const body = {...draft, review: false, reviewReason: "", createdAt: now, updatedAt: now, agencyKey: agencyKeyOf(draft.agency), mine: {}, names: [], records: [], needsDerive: true,
         base: {at: now, status: draft.status, dates: draft.dates, project: draft.project, agency: draft.agency, role: draft.role || "", received: draft.received || TODAY,
                location: draft.location || "", fitLocation: draft.fitLocation || "", filmLocation: draft.filmLocation || "", rate: draft.rate || "", respondBy: draft.respondBy || null}};
       delete body.tidied;
@@ -1758,11 +1761,18 @@ async function saveDraft(){
     if (!same(draft.notes, old.notes)) ch.notes = draft.notes || "";
     if (!!draft.attention !== !!old.attention) ch.attention = !!draft.attention;
     MINE_FIELDS.forEach(k => { if (!same(draft[k], old[k])) { ch[k] = draft[k] ?? null; ch["mine." + k] = draft[k] ?? null; } });
+    if ("status" in ch) ch["mine.statusAt"] = now;
     if ("agency" in ch) ch.agencyKey = agencyKeyOf(draft.agency);
     const before = new Map((old.dates || []).map(e => [e.d, e])), after = new Map(draft.dates.map(e => [e.d, e]));
     let days = 0;
-    before.forEach((e, d) => { if (!after.has(d)){ ch["mine.days." + d] = {removed: true}; days++; } });
-    after.forEach((e, d) => { const o = before.get(d); if (!o || JSON.stringify(dayView(o)) !== JSON.stringify(dayView(e))){ ch["mine.days." + d] = dayView(e); days++; } });
+    before.forEach((e, d) => { if (!after.has(d)){ ch["mine.days." + d] = {removed: true, at: now}; days++; } });
+    after.forEach((e, d) => {
+      const o = before.get(d), nv = dayView(e);
+      if (!o){ ch["mine.days." + d] = {...nv, at: now}; days++; return; }          // a day you added
+      const ov = dayView(o);
+      // only what you changed on that day (changing a call time doesn't fix the day's colour)
+      Object.keys(nv).forEach(f => { if (nv[f] !== ov[f]){ ch["mine.days." + d + "." + f] = nv[f]; days++; if (f === "state") ch["mine.days." + d + ".at"] = now; } });
+    });
     if (days) ch.dates = draft.dates;
     await S.db.collection("calls").doc(draftId).update(ch);
     toast("Saved"); closeSheet();
@@ -1770,7 +1780,8 @@ async function saveDraft(){
 }
 async function setStatus(id, st){
   const c = S.calls.get(id); if (!c) return;
-  try { await S.db.collection("calls").doc(id).update({status: st, "mine.status": st, needsDerive: true, updatedAt: new Date().toISOString()}); toast(`${nameOf(c)}: ${SMAP[st]?.short || st}`); }
+  const now = new Date().toISOString();
+  try { await S.db.collection("calls").doc(id).update({status: st, "mine.status": st, "mine.statusAt": now, needsDerive: true, updatedAt: now}); toast(`${nameOf(c)}: ${SMAP[st]?.short || st}`); }
   catch (e) { writeFailed(e); }
 }
 async function deleteJob(id){

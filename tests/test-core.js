@@ -89,10 +89,16 @@ const typed = (project, agency, status, dates) => ({ base: { at: "2026-09-01T00:
 // 7) Your own changes always win over emails
 {
   const job = typed("Puffin", "Lucas Extras", "confirmed", [{ d: "2026-10-20", kind: "film" }, { d: "2026-10-21", kind: "film" }]);
-  job.mine = { days: { "2026-10-21": { state: "canceled" } }, status: "confirmed" };
-  const later = mail("r7", "2026-10-10T09:00:00Z", "Booking Confirmation - Puffin", "You are booked for Tue 20 Oct 2026 and Wed 21 Oct 2026.", "Lucas Extras");
-  const j = Core.deriveJob(job, [later]);
-  ok("A day you canceled stays canceled after a booking email", states(j) === "10-20:confirmed 10-21:canceled", states(j));
+  const booking = mail("r7", "2026-10-10T09:00:00Z", "Booking Confirmation - Puffin", "You are booked for Tue 20 Oct 2026 and Wed 21 Oct 2026.", "Lucas Extras");
+  job.mine = { days: { "2026-10-21": { state: "canceled", at: "2026-10-11T08:00:00Z" } } };
+  const j = Core.deriveJob(job, [booking]);
+  ok("A day you canceled after the booking email stays canceled", states(j) === "10-20:confirmed 10-21:canceled", states(j));
+  job.mine = { days: { "2026-10-21": { state: "canceled", at: "2026-10-09T08:00:00Z" } } };
+  const j2 = Core.deriveJob(job, [booking]);
+  ok("…but a booking that arrives AFTER your change books that day (newest news wins)", states(j2) === "10-20:confirmed 10-21:confirmed", states(j2));
+  job.mine = { days: { "2026-10-21": { callTime: "06:30" } } };
+  const j3 = Core.deriveJob(job, [booking]);
+  ok("Adding a call time doesn't freeze the day's colour", states(j3) === "10-20:confirmed 10-21:confirmed" && j3.dates[1].callTime === "06:30", states(j3));
 }
 // 8) Placeholder names never join jobs ("TBC", "Commercial")
 {
@@ -167,6 +173,31 @@ const typed = (project, agency, status, dates) => ({ base: { at: "2026-09-01T00:
   const r = mail("r14", "2026-05-15T10:00:00Z", "Booking Confirmation: Tuesday 19th May – Hull Night Shoot", "You are booked.", "Lucas Extras");
   const m = Core.matchRecord(r, index(jobs));
   ok("Unplaced booking → Check list with the likely job offered", !m.sure && m.candidates.indexOf("n") !== -1, JSON.stringify(m));
+}
+// 16) Agency codes are not production names ("EXP - Larkin" is not "EXP - Roundabout S2")
+{
+  const jobs = { r: typed("EXP - Roundabout S2", "Extra People", "available", [{ d: "2026-10-12", kind: "film" }]) };
+  const rel = mail("r16a", "2026-10-10T10:00:00Z", "EXP - Larkin - You have been released", "You have been released.");
+  const m1 = Core.matchRecord(rel, index(jobs));
+  ok("'EXP - Larkin' release does not go to 'EXP - Roundabout S2'", m1.job !== "r", JSON.stringify(m1));
+  const call = mail("r16b", "2026-10-10T10:00:00Z", "EXP - Larkin - Availability Check", "Production: Larkin\nShoot: Wed 14 Oct 2026");
+  const m2 = Core.matchRecord(call, index(jobs));
+  ok("…and its new request makes a new job", m2.job === null && m2.sure, JSON.stringify(m2));
+}
+// 17) Tapping "Yes, available" doesn't hide a later booking
+{
+  const c = mail("r17a", "2026-10-01T10:00:00Z", "New Availability request on Tern", "You have an availability enquiry for:\nTern\nFri 16 Oct 2026\n(Filming)");
+  const b = mail("r17b", "2026-10-05T10:00:00Z", "Booking Confirmation - Tern", "You are booked for Fri 16 Oct 2026.");
+  const j = Core.deriveJob({ base: {}, mine: { status: "available", statusAt: "2026-10-02T09:00:00Z" } }, [c, b]);
+  ok("Your 'available' tap, then a booking email → booked", j.status === "confirmed", states(j));
+}
+// 18) "Auto" on a saved job keeps the saved colour
+{
+  const job = typed("Robin", "Extra People", "confirmed", [{ d: "2026-10-20", kind: "film", state: "released" }]);
+  job.base.at = "2026-10-03T12:00:00Z";
+  job.mine = { days: { "2026-10-20": { state: "" } } };
+  const j = Core.deriveJob(job, []);
+  ok("'Auto' on a saved job doesn't change a released day", states(j) === "10-20:released", states(j));
 }
 // 15) Same input, same output (no hidden state)
 {
