@@ -1,0 +1,14 @@
+{
+  "name": "Filming Schedule",
+  "short_name": "Filming",
+  "description": "Availability checks, bookings, fittings and pay for extras work",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#101216",
+  "theme_color": "#07080A",
+  "icons": [
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

@@ -1,0 +1,64 @@
+# Signs in to your EP portal and reads your Payments pages (see scripts/ep-payments.js).
+# Run it by hand: Actions → "EP payments" → Run workflow.
+name: EP portal
+
+on:
+  workflow_dispatch:
+    inputs:
+      export:
+        description: "Private export (sealed) of the payments pages to the vault branch"
+        type: boolean
+        default: true
+      only:
+        description: "Only this EP account (1 or 2); empty = both"
+        default: ""
+
+concurrency:
+  group: ep-payments
+
+jobs:
+  payments:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write             # only used to put a sealed export on the "vault" branch
+    steps:
+      - name: Get the app's code (private repository, read-only key)
+        uses: actions/checkout@v5
+        with:
+          repository: cassiomariano/filming-schedule-app
+          ref: main                       # named here: the robots can't look it up in a private repository
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --omit=dev
+      - run: npm i --no-save playwright@1 && npx playwright install --with-deps chromium
+      - run: node scripts/ep-payments.js
+        env:
+          EP_EMAIL: ${{ secrets.EP_EMAIL }}
+          EP_PASSWORD: ${{ secrets.EP_PASSWORD }}
+          EP_EMAIL_1: ${{ secrets.EP_EMAIL_1 }}
+          EP_EMAIL_2: ${{ secrets.EP_EMAIL_2 }}
+          EP_PASSWORD_1: ${{ secrets.EP_PASSWORD_1 }}
+          EP_PASSWORD_2: ${{ secrets.EP_PASSWORD_2 }}
+          ET_EMAIL_1: ${{ secrets.ET_EMAIL_1 }}
+          ET_EMAIL_2: ${{ secrets.ET_EMAIL_2 }}
+          EP_TOTP_1: ${{ secrets.EP_TOTP_1 }}
+          EP_TOTP_2: ${{ secrets.EP_TOTP_2 }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          YAHOO_EMAIL_1: ${{ secrets.YAHOO_EMAIL_1 }}
+          YAHOO_APP_PASSWORD_1: ${{ secrets.YAHOO_APP_PASSWORD_1 }}
+          YAHOO_EMAIL_2: ${{ secrets.YAHOO_EMAIL_2 }}
+          YAHOO_APP_PASSWORD_2: ${{ secrets.YAHOO_APP_PASSWORD_2 }}
+          EP_ONLY: ${{ github.event.inputs.only || '' }}
+          EP_EXPORT: ${{ github.event.inputs.export || 'true' }}
+      - name: Put the sealed export on the vault branch
+        if: ${{ github.event.inputs.export != 'false' && hashFiles('export.sealed.json') != '' }}
+        run: |
+          mkdir /tmp/v && cp export.sealed.json /tmp/v/
+          cd /tmp/v && git init -q -b vault && git add export.sealed.json
+          git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -q -m "sealed export"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" vault

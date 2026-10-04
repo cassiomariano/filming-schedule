@@ -1,0 +1,27 @@
+# Checks that the robots can read the private code (read-only key) and that its tests pass.
+name: Private code check
+on:
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Is the key there? (prints only yes/no and its first line's type)
+        env:
+          K: ${{ secrets.DEPLOY_KEY }}
+        run: |
+          if [ -z "$K" ]; then echo "::error::DEPLOY_KEY is missing or empty in this repository's Actions secrets"; exit 1; fi
+          echo "DEPLOY_KEY is set ($(printf '%s' "$K" | wc -l) line breaks)"; printf '%s\n' "$K" | head -1 | grep -q "BEGIN OPENSSH PRIVATE KEY" && echo "starts correctly" || echo "::error::DEPLOY_KEY does not start with the BEGIN line"
+      - name: Get the app's code (private repository, read-only key)
+        uses: actions/checkout@v5
+        with:
+          repository: cassiomariano/filming-schedule-app
+          ref: main                       # named here: the robots can't look it up in a private repository
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund > /dev/null
+      - run: npm test > /dev/null && echo "Tests pass on the private code"
+      - run: node scripts/build-site.js /tmp/site

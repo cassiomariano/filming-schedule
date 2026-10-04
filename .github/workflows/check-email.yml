@@ -1,0 +1,99 @@
+# Reads your Yahoo inboxes and adds new availability checks to your schedule.
+# It is started every 5 minutes by a free timer at cron-job.org (see SETUP.md "Faster checks"),
+# with GitHub's own schedule below as a back-up. You can also run it by hand:
+# Actions tab → "Check email" → Run workflow.
+name: Check email
+
+on:
+  schedule:
+    - cron: "7,37 * * * *"        # every 30 minutes (GitHub may run it a few minutes late)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "What to do (normal = read new mail)"
+        type: choice
+        default: normal
+        options: [normal, rescan, rederive, test_alert, export, backup, restore, migrate, fix]
+      days_back:
+        description: "rescan: how many days of email to read again (only missing emails are added)"
+        default: "7"
+      restore:
+        description: "restore: the backup's date (YYYY-MM-DD) – replaces your jobs with that copy"
+        default: ""
+
+concurrency:
+  # never two runs at the same time (a run waits for the one before it)
+  group: check-email
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write             # only used to put a sealed export on the "vault" branch
+    timeout-minutes: 60
+    steps:
+      - name: Get the app's code (private repository, read-only key)
+        uses: actions/checkout@v5
+        with:
+          repository: cassiomariano/filming-schedule-app
+          ref: main                       # named here: the robots can't look it up in a private repository
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --omit=dev
+      - name: Test gate – the rules must pass every known case before they touch your schedule
+        run: npm test > /dev/null
+      - name: Fetch the backup to restore
+        if: ${{ github.event.inputs.mode == 'restore' }}
+        run: |
+          git clone -q --depth 1 -b backups "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" /tmp/b
+          cp "/tmp/b/backups/${{ github.event.inputs.restore }}.sealed.json" restore.sealed.json
+      - run: node scripts/check-email.js
+        env:
+          MODE: ${{ github.event.inputs.mode || 'normal' }}
+          DAYS_BACK: ${{ github.event.inputs.days_back || '7' }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          YAHOO_EMAIL_1: ${{ secrets.YAHOO_EMAIL_1 }}
+          YAHOO_APP_PASSWORD_1: ${{ secrets.YAHOO_APP_PASSWORD_1 }}
+          YAHOO_EMAIL_2: ${{ secrets.YAHOO_EMAIL_2 }}
+          YAHOO_APP_PASSWORD_2: ${{ secrets.YAHOO_APP_PASSWORD_2 }}
+      - name: Put the sealed export on the vault branch
+        if: ${{ github.event.inputs.mode == 'export' }}
+        run: |
+          mkdir /tmp/v && cp export.sealed.json /tmp/v/
+          cd /tmp/v && git init -q -b vault && git add export.sealed.json
+          git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -q -m "sealed export"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" vault
+      - name: Put the daily money review on the review branch (job ids and counts only)
+        if: ${{ hashFiles('review.json') != '' }}
+        run: |
+          mkdir /tmp/rv && cp review.json /tmp/rv/
+          cd /tmp/rv && git init -q -b review && git add review.json
+          git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -q -m "money review"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" review
+      - name: Keep the weekly backup on the backups branch (last 8)
+        if: ${{ hashFiles('backup.sealed.json') != '' }}
+        run: |
+          D=$(TZ=Europe/London date +%F)
+          if git clone -q --depth 1 -b backups "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" /tmp/bk 2>/dev/null; then :; else
+            mkdir /tmp/bk && cd /tmp/bk && git init -q -b backups && cd -; fi
+          mkdir -p /tmp/bk/backups && cp backup.sealed.json "/tmp/bk/backups/$D.sealed.json"
+          cd /tmp/bk && ls backups/*.sealed.json | sort | head -n -8 | xargs -r git rm -q --cached --ignore-unmatch 2>/dev/null; ls backups/*.sealed.json | sort | head -n -8 | xargs -r rm -f
+          git add -A && git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -q -m "backup $D"
+          git push -q "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" backups
+      - name: Publish the newest app to the website (only when the code changed)
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.mode == '' || github.event.inputs.mode == 'normal' }}
+        run: |
+          SHA=$(git rev-parse HEAD)
+          git clone -q --depth 1 "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" /tmp/pub
+          if [ "$(cat /tmp/pub/VERSION 2>/dev/null)" = "$SHA" ]; then echo "Website already up to date"; exit 0; fi
+          npm ci --no-audit --no-fund > /dev/null   # the tools that compress the app
+          node scripts/build-site.js /tmp/site
+          cd /tmp/pub && find . -mindepth 1 -maxdepth 1 ! -name .git ! -name .github -exec rm -rf {} +
+          cp -r /tmp/site/. /tmp/pub/ && echo "$SHA" > /tmp/pub/VERSION
+          git add -A
+          git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -q -m "Publish app"
+          git push -q origin HEAD:main

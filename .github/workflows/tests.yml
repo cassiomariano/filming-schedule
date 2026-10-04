@@ -1,0 +1,29 @@
+# Tests every morning (and by hand) on the app's private code. The robot also runs the same tests before each run (check-email.yml)
+# and refuses to work with rules that fail them.
+name: Tests
+on:
+  schedule:
+    - cron: "17 6 * * *"   # every morning
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the app's code (private repository, read-only key)
+        uses: actions/checkout@v5
+        with:
+          repository: cassiomariano/filming-schedule-app
+          ref: main                       # named here: the robots can't look it up in a private repository
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --omit=dev
+      - name: Parser and replay tests (made-up emails)
+        run: npm test
+      - name: Replay of your real emails (sealed; only the robot's key can open them)
+        if: ${{ hashFiles('tests/real.sealed.json') != '' }}
+        run: node tests/test-real.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
