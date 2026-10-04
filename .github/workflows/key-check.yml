@@ -11,7 +11,7 @@ jobs:
           try() { R=$(curl -s -w ' HTTP %{http_code}' -H 'Content-Type: application/json' ${1:+-H "Referer: $1"} \
             -d '{"email":"nobody@example.invalid","password":"x","returnSecureToken":true}' \
             "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$K");
-            echo "$2 → $(echo "$R" | grep -o '"message": *"[^"]*"' | head -1) ${R##* HTTP }"; }
+            echo "::notice::$2 → $(echo "$R" | grep -o '"message": *"[^"]*"' | head -1) ${R##* HTTP }"; }
           try "https://cassiomariano.github.io/filming-schedule/" "From the app's website (should be a login error, not blocked)"
           try "https://some-copy.example.com/" "From another website (should be blocked, 403)"
           try "" "From no website (should be blocked, 403)"
