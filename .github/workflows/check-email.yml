@@ -13,7 +13,7 @@ on:
         description: "What to do (normal = read new mail)"
         type: choice
         default: normal
-        options: [normal, rescan, rederive, test_alert, export, backup, restore, migrate, fix]
+        options: [normal, rescan, rederive, test_alert, export, backup, restore, migrate, fix, find_payments]
       days_back:
         description: "rescan: how many days of email to read again (only missing emails are added)"
         default: "7"
@@ -61,7 +61,7 @@ jobs:
           YAHOO_EMAIL_2: ${{ secrets.YAHOO_EMAIL_2 }}
           YAHOO_APP_PASSWORD_2: ${{ secrets.YAHOO_APP_PASSWORD_2 }}
       - name: Put the sealed export on the vault branch
-        if: ${{ github.event.inputs.mode == 'export' }}
+        if: ${{ github.event.inputs.mode == 'export' || github.event.inputs.mode == 'find_payments' }}
         run: |
           mkdir /tmp/v && cp export.sealed.json /tmp/v/
           cd /tmp/v && git init -q -b vault && git add export.sealed.json
