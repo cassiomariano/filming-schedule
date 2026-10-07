@@ -1,5 +1,6 @@
 # The instant watcher: stays connected to your Yahoo inboxes and reads a new email within seconds.
 # Each watcher runs for almost 6 hours (GitHub's limit) and starts the next one 10 minutes before it stops.
+# Only one watcher is ever on duty (a lock in the database); a spare one stops by itself.
 # If one ever stops early, the 5-minute "Check email" run starts a new one, and GitHub's own schedule
 # below is a third back-up. The 5-minute check keeps running too, so no email can be missed.
 name: Instant email watcher
@@ -16,35 +17,20 @@ jobs:
       actions: write              # only used to start the next watcher
     timeout-minutes: 360
     steps:
-      - name: Is a watcher already running?
-        id: other
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # an older watcher that started less than 5 h 30 min ago is still on duty: this one isn't needed
-          SINCE=$(date -u -d '-330 min' +%FT%TZ)
-          N=$(gh api "repos/${{ github.repository }}/actions/workflows/watch-email.yml/runs?status=in_progress&per_page=20" \
-            --jq "[.workflow_runs[] | select(.id < ${{ github.run_id }}) | select(.run_started_at > \"$SINCE\")] | length")
-          if [ "$N" -gt 0 ]; then echo "Another watcher is on duty."; echo "skip=1" >> "$GITHUB_OUTPUT"; fi
       - name: Get the app's code (private repository, read-only key)
-        if: ${{ steps.other.outputs.skip != '1' }}
         uses: actions/checkout@v5
         with:
           repository: cassiomariano/filming-schedule-app
           ref: main
           ssh-key: ${{ secrets.DEPLOY_KEY }}
       - uses: actions/setup-node@v5
-        if: ${{ steps.other.outputs.skip != '1' }}
         with:
           node-version: 22
           cache: npm
-      - if: ${{ steps.other.outputs.skip != '1' }}
-        run: npm ci --omit=dev
+      - run: npm ci --omit=dev
       - name: Test gate – the rules must pass every known case before they touch your schedule
-        if: ${{ steps.other.outputs.skip != '1' }}
         run: npm test > /dev/null
       - name: Watch the inboxes
-        if: ${{ steps.other.outputs.skip != '1' }}
         run: node scripts/watch-email.js
         env:
           GH_TOKEN: ${{ github.token }}
