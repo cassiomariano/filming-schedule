@@ -1,6 +1,7 @@
 # Reads your Yahoo inboxes and adds new availability checks to your schedule.
-# It is started every 5 minutes by a free timer at cron-job.org (see SETUP.md "Faster checks"),
-# with GitHub's own schedule below as a back-up. You can also run it by hand:
+# New emails are normally read within seconds by the instant watcher (watch-email.yml).
+# This full check is started every 5 minutes by a free timer at cron-job.org (see SETUP.md "Faster checks"),
+# with GitHub's own schedule below as a back-up; it also restarts the watcher if it ever stopped. You can also run it by hand:
 # Actions tab → "Check email" → Run workflow.
 name: Check email
 
@@ -30,8 +31,18 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write             # only used to put a sealed export on the "vault" branch
+      actions: write              # only used to restart the instant watcher if it stopped
     timeout-minutes: 60
     steps:
+      - name: Keep the instant watcher running (starts it again if it stopped)
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.mode == '' || github.event.inputs.mode == 'normal' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          W="repos/${{ github.repository }}/actions/workflows/watch-email.yml"
+          N=$(gh api "$W/runs?status=in_progress&per_page=1" --jq '.total_count' || echo 1)
+          Q=$(gh api "$W/runs?status=queued&per_page=1" --jq '.total_count' || echo 1)
+          if [ "$N" = "0" ] && [ "$Q" = "0" ]; then gh api -X POST "$W/dispatches" -f ref=main && echo "::notice title=Watcher::The instant watcher wasn't running – started it again."; fi
       - name: Get the app's code (private repository, read-only key)
         uses: actions/checkout@v5
         with:
