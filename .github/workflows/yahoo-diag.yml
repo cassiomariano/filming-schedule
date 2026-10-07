@@ -1,0 +1,28 @@
+# Diagnostic only (run by hand): which way of noticing a new email works best with Yahoo.
+# Writes times and counts only – never email content.
+name: Yahoo diagnostic
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        default: "20"
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: cassiomariano/filming-schedule-app
+          ref: main
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --omit=dev
+      - run: node scripts/yahoo-diag.js
+        env:
+          DIAG_MINUTES: ${{ github.event.inputs.minutes }}
+          YAHOO_EMAIL_1: ${{ secrets.YAHOO_EMAIL_1 }}
+          YAHOO_APP_PASSWORD_1: ${{ secrets.YAHOO_APP_PASSWORD_1 }}
