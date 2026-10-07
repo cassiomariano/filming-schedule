@@ -14,7 +14,7 @@ on:
         description: "What to do (normal = read new mail)"
         type: choice
         default: normal
-        options: [normal, rescan, rederive, test_alert, export, backup, restore, migrate, fix, find_payments, page_dump, peek]
+        options: [normal, rescan, rederive, test_alert, export, backup, restore, migrate, fix, find_payments, page_dump, peek, idle_test]
       days_back:
         description: "rescan: how many days of email to read again (only missing emails are added)"
         default: "7"
