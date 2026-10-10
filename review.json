@@ -1,0 +1,33 @@
+{
+ "date": "2026-10-10",
+ "jobsWorked": 30,
+ "paymentAlerts": [],
+ "notWorked": [],
+ "noPayment": [
+  {
+   "id": "s136",
+   "last": "2026-03-09"
+  },
+  {
+   "id": "s139",
+   "last": "2026-03-16"
+  },
+  {
+   "id": "s165",
+   "last": "2025-08-01"
+  },
+  {
+   "id": "s167",
+   "last": "2025-07-06"
+  },
+  {
+   "id": "s169",
+   "last": "2025-07-22"
+  }
+ ],
+ "counts": {
+  "paymentAlerts": 0,
+  "notWorked": 0,
+  "noPayment": 5
+ }
+}
