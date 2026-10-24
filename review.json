@@ -1,0 +1,17 @@
+{
+ "date": "2026-10-24",
+ "jobsWorked": 33,
+ "paymentAlerts": [],
+ "notWorked": [],
+ "noPayment": [
+  {
+   "id": "s169",
+   "last": "2025-07-22"
+  }
+ ],
+ "counts": {
+  "paymentAlerts": 0,
+  "notWorked": 0,
+  "noPayment": 1
+ }
+}
