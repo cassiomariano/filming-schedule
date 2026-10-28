@@ -1,0 +1,58 @@
+# AI second reader – TRIAL ONLY (changes nothing in your schedule).
+# A small open-source AI model runs on this GitHub machine (no outside AI service; the email text never leaves it),
+# reads recent agency emails and fills the same form the rules fill; both readings are compared.
+# The comparison is sealed (only your key opens it); the log shows counts only.
+name: AI trial
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model (Ollama tag)"
+        default: "qwen2.5:3b"
+      limit:
+        description: "How many emails"
+        default: "40"
+
+concurrency:
+  group: ai-trial
+
+jobs:
+  trial:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write             # only used to put the sealed result on the "vault" branch
+    timeout-minutes: 300
+    steps:
+      - name: Get the app's code (private repository, read-only key)
+        uses: actions/checkout@v5
+        with:
+          repository: cassiomariano/filming-schedule-app
+          ref: main
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --omit=dev
+      - name: Test gate
+        run: npm test > /dev/null
+      - name: Install the local AI (Ollama) and the model
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh > /dev/null
+          (ollama serve > /tmp/ollama.log 2>&1 &)
+          for i in $(seq 1 30); do curl -s http://127.0.0.1:11434/api/version > /dev/null && break; sleep 2; done
+          ollama pull "${{ github.event.inputs.model }}" > /dev/null
+      - name: Read and compare (sealed)
+        run: node scripts/ai-reader.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          AI_MODEL: ${{ github.event.inputs.model }}
+          AI_LIMIT: ${{ github.event.inputs.limit }}
+      - name: Put the sealed result on the vault branch
+        if: ${{ hashFiles('export.sealed.json') != '' }}
+        run: |
+          mkdir /tmp/v && cp export.sealed.json /tmp/v/
+          cd /tmp/v && git init -q -b vault && git add export.sealed.json
+          git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -q -m "sealed export"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" vault
